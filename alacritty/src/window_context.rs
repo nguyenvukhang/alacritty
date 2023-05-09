@@ -482,9 +482,7 @@ impl WindowContext {
         if self.dirty || self.mouse.hint_highlight_dirty {
             self.dirty |= self.display.update_highlighted_hints(
                 &terminal,
-                &self.config,
                 &self.mouse,
-                self.modifiers,
             );
             self.mouse.hint_highlight_dirty = false;
         }

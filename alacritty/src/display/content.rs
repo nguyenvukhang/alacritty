@@ -9,12 +9,12 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::term::color::{CellRgb, Rgb};
-use alacritty_terminal::term::search::{Match, RegexSearch};
+use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{self, RenderableContent as TerminalContent, Term};
 
 use crate::config::UiConfig;
 use crate::display::color::{List, DIM_FACTOR};
-use crate::display::hint::{self, HintState};
+use crate::display::hint::HintState;
 use crate::display::Display;
 use crate::event::SearchState;
 
@@ -43,7 +43,8 @@ impl<'a> RenderableContent<'a> {
         term: &'a Term<T>,
         search_state: &'a SearchState,
     ) -> Self {
-        let search = search_state.dfas().map(|dfas| HintMatches::visible_regex_matches(term, dfas));
+        // TODO: remove
+        let search = None;
         let focused_match = search_state.focused_match();
         let terminal_content = term.renderable_content();
 
@@ -66,7 +67,7 @@ impl<'a> RenderableContent<'a> {
         let cursor_point = term::point_to_viewport(display_offset, cursor_point).unwrap();
 
         let hint = if display.hint_state.active() {
-            display.hint_state.update_matches(term);
+            display.hint_state.update_matches();
             Some(Hint::from(&display.hint_state))
         } else {
             None
@@ -471,12 +472,6 @@ impl<'a> HintMatches<'a> {
     /// Create new renderable matches iterator..
     fn new(matches: impl Into<Cow<'a, [Match]>>) -> Self {
         Self { matches: matches.into(), index: 0 }
-    }
-
-    /// Create from regex matches on term visable part.
-    fn visible_regex_matches<T>(term: &Term<T>, dfas: &RegexSearch) -> Self {
-        let matches = hint::visible_regex_match_iter(term, dfas).collect::<Vec<_>>();
-        Self::new(matches)
     }
 
     /// Advance the regex tracker to the next point.

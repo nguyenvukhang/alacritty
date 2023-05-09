@@ -17,7 +17,6 @@ use log::{debug, info};
 use parking_lot::MutexGuard;
 use serde::{Deserialize, Serialize};
 use winit::dpi::PhysicalSize;
-use winit::event::ModifiersState;
 use winit::window::CursorIcon;
 
 use crossfont::{self, Rasterize, Rasterizer};
@@ -993,13 +992,7 @@ impl Display {
     /// Update the mouse/vi mode cursor hint highlighting.
     ///
     /// This will return whether the highlighted hints changed.
-    pub fn update_highlighted_hints<T>(
-        &mut self,
-        term: &Term<T>,
-        config: &UiConfig,
-        mouse: &Mouse,
-        modifiers: ModifiersState,
-    ) -> bool {
+    pub fn update_highlighted_hints<T>(&mut self, term: &Term<T>, mouse: &Mouse) -> bool {
         let mut dirty = false;
 
         // Abort if mouse highlighting conditions are not met.
@@ -1011,7 +1004,8 @@ impl Display {
 
         // Find highlighted hint at mouse position.
         let point = mouse.point(&self.size_info, term.grid().display_offset());
-        let highlighted_hint = hint::highlighted_at(term, config, point, modifiers);
+        // TODO: remove
+        let highlighted_hint = None;
 
         // Update cursor shape.
         if highlighted_hint.is_some() {

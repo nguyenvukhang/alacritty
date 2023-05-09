@@ -1,10 +1,7 @@
-use std::cell::RefCell;
-use std::fmt::{self, Formatter};
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use log::error;
-use serde::de::{Error as SerdeError, MapAccess, Visitor};
+use serde::de::Error as SerdeError;
 use serde::{self, Deserialize, Deserializer};
 use unicode_width::UnicodeWidthChar;
 use winit::event::{ModifiersState, VirtualKeyCode};
@@ -13,7 +10,6 @@ use alacritty_config_derive::{ConfigDeserialize, SerdeReplace};
 use alacritty_terminal::config::{
     Config as TerminalConfig, Percentage, Program, LOG_TARGET_CONFIG,
 };
-use alacritty_terminal::term::search::RegexSearch;
 
 use crate::config::bell::BellConfig;
 use crate::config::bindings::{
@@ -24,11 +20,6 @@ use crate::config::debug::Debug;
 use crate::config::font::Font;
 use crate::config::mouse::Mouse;
 use crate::config::window::WindowConfig;
-
-/// Regex used for the default URL hint.
-#[rustfmt::skip]
-const URL_REGEX: &str = "(ipfs:|ipns:|magnet:|mailto:|gemini:|gopher:|https:|http:|news:|file:|git:|ssh:|ftp:)\
-                         [^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`]+";
 
 #[derive(ConfigDeserialize, Clone, Debug, PartialEq)]
 pub struct UiConfig {
@@ -236,11 +227,6 @@ pub struct Hints {
 
 impl Default for Hints {
     fn default() -> Self {
-        // Add URL hint by default when no other hint is present.
-        let pattern = LazyRegexVariant::Pattern(String::from(URL_REGEX));
-        let regex = LazyRegex(Rc::new(RefCell::new(pattern)));
-        let content = HintContent::new(Some(regex), true);
-
         #[cfg(not(any(target_os = "macos", windows)))]
         let action = HintAction::Command(Program::Just(String::from("xdg-open")));
         #[cfg(target_os = "macos")]
@@ -253,7 +239,6 @@ impl Default for Hints {
 
         Self {
             enabled: vec![Hint {
-                content,
                 action,
                 post_processing: true,
                 mouse: Some(HintMouse { enabled: true, mods: Default::default() }),
@@ -333,10 +318,6 @@ pub enum HintAction {
 /// Hint configuration.
 #[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Hint {
-    /// Regex for finding matches.
-    #[serde(flatten)]
-    pub content: HintContent,
-
     /// Action executed when this hint is triggered.
     #[serde(flatten)]
     pub action: HintAction,
@@ -350,80 +331,6 @@ pub struct Hint {
 
     /// Binding required to search for this hint.
     binding: Option<HintBinding>,
-}
-
-#[derive(Default, Clone, Debug, PartialEq, Eq)]
-pub struct HintContent {
-    /// Regex for finding matches.
-    pub regex: Option<LazyRegex>,
-
-    /// Escape sequence hyperlinks.
-    pub hyperlinks: bool,
-}
-
-impl HintContent {
-    pub fn new(regex: Option<LazyRegex>, hyperlinks: bool) -> Self {
-        Self { regex, hyperlinks }
-    }
-}
-
-impl<'de> Deserialize<'de> for HintContent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct HintContentVisitor;
-        impl<'a> Visitor<'a> for HintContentVisitor {
-            type Value = HintContent;
-
-            fn expecting(&self, f: &mut Formatter<'_>) -> fmt::Result {
-                f.write_str("a mapping")
-            }
-
-            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-            where
-                M: MapAccess<'a>,
-            {
-                let mut content = Self::Value::default();
-
-                while let Some((key, value)) = map.next_entry::<String, serde_yaml::Value>()? {
-                    match key.as_str() {
-                        "regex" => match Option::<LazyRegex>::deserialize(value) {
-                            Ok(regex) => content.regex = regex,
-                            Err(err) => {
-                                error!(
-                                    target: LOG_TARGET_CONFIG,
-                                    "Config error: hint's regex: {}", err
-                                );
-                            },
-                        },
-                        "hyperlinks" => match bool::deserialize(value) {
-                            Ok(hyperlink) => content.hyperlinks = hyperlink,
-                            Err(err) => {
-                                error!(
-                                    target: LOG_TARGET_CONFIG,
-                                    "Config error: hint's hyperlinks: {}", err
-                                );
-                            },
-                        },
-                        _ => (),
-                    }
-                }
-
-                // Require at least one of hyperlinks or regex trigger hint matches.
-                if content.regex.is_none() && !content.hyperlinks {
-                    return Err(M::Error::custom(
-                        "Config error: At least on of the hint's regex or hint's hyperlinks must \
-                         be set",
-                    ));
-                }
-
-                Ok(content)
-            }
-        }
-
-        deserializer.deserialize_any(HintContentVisitor)
-    }
 }
 
 /// Binding for triggering a keyboard hint.
@@ -445,74 +352,3 @@ pub struct HintMouse {
     /// Required mouse modifiers for hint highlighting.
     pub mods: ModsWrapper,
 }
-
-/// Lazy regex with interior mutability.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LazyRegex(Rc<RefCell<LazyRegexVariant>>);
-
-impl LazyRegex {
-    /// Execute a function with the compiled regex DFAs as parameter.
-    pub fn with_compiled<T, F>(&self, mut f: F) -> T
-    where
-        F: FnMut(&RegexSearch) -> T,
-    {
-        f(self.0.borrow_mut().compiled())
-    }
-}
-
-impl<'de> Deserialize<'de> for LazyRegex {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let regex = LazyRegexVariant::Pattern(String::deserialize(deserializer)?);
-        Ok(Self(Rc::new(RefCell::new(regex))))
-    }
-}
-
-/// Regex which is compiled on demand, to avoid expensive computations at startup.
-#[derive(Clone, Debug)]
-pub enum LazyRegexVariant {
-    Compiled(Box<RegexSearch>),
-    Pattern(String),
-}
-
-impl LazyRegexVariant {
-    /// Get a reference to the compiled regex.
-    ///
-    /// If the regex is not already compiled, this will compile the DFAs and store them for future
-    /// access.
-    fn compiled(&mut self) -> &RegexSearch {
-        // Check if the regex has already been compiled.
-        let regex = match self {
-            Self::Compiled(regex_search) => return regex_search,
-            Self::Pattern(regex) => regex,
-        };
-
-        // Compile the regex.
-        let regex_search = match RegexSearch::new(regex) {
-            Ok(regex_search) => regex_search,
-            Err(error) => {
-                error!("hint regex is invalid: {}", error);
-                RegexSearch::new("").unwrap()
-            },
-        };
-        *self = Self::Compiled(Box::new(regex_search));
-
-        // Return a reference to the compiled DFAs.
-        match self {
-            Self::Compiled(dfas) => dfas,
-            Self::Pattern(_) => unreachable!(),
-        }
-    }
-}
-
-impl PartialEq for LazyRegexVariant {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Pattern(regex), Self::Pattern(other_regex)) => regex == other_regex,
-            _ => false,
-        }
-    }
-}
-impl Eq for LazyRegexVariant {}

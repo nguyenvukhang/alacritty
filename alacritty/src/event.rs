@@ -38,7 +38,7 @@ use alacritty_terminal::event_loop::Notifier;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::search::{Match, RegexSearch};
+use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 
 #[cfg(unix)]
@@ -139,9 +139,6 @@ pub struct SearchState {
     /// While going through history, the [`SearchState::history_index`] will point to the element
     /// in history which is currently being previewed.
     history: VecDeque<String>,
-
-    /// Compiled search automatons.
-    dfas: Option<RegexSearch>,
 }
 
 impl SearchState {
@@ -160,11 +157,6 @@ impl SearchState {
         self.focused_match.as_ref()
     }
 
-    /// Active search dfas.
-    pub fn dfas(&self) -> Option<&RegexSearch> {
-        self.dfas.as_ref()
-    }
-
     /// Search regex text if a search is active.
     fn regex_mut(&mut self) -> Option<&mut String> {
         self.history_index.and_then(move |index| self.history.get_mut(index))
@@ -180,7 +172,6 @@ impl Default for SearchState {
             history_index: Default::default(),
             history: Default::default(),
             origin: Default::default(),
-            dfas: Default::default(),
         }
     }
 }
@@ -524,8 +515,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             self.copy_selection(ClipboardType::Selection);
         }
 
-        self.search_state.dfas = None;
-
         self.exit_search();
     }
 
@@ -638,14 +627,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         // Store origin and scroll back to the match.
         self.terminal.scroll_display(Scroll::Delta(-self.search_state.display_offset_delta));
         self.search_state.origin = new_origin;
-    }
-
-    /// Find the next search match.
-    fn search_next(&mut self, origin: Point, direction: Direction, side: Side) -> Option<Match> {
-        self.search_state
-            .dfas
-            .as_ref()
-            .and_then(|dfas| self.terminal.search_next(dfas, origin, direction, side, None))
     }
 
     #[inline]
@@ -826,11 +807,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         if regex.is_empty() {
             // Stop search if there's nothing to search for.
             self.search_reset_state();
-            self.search_state.dfas = None;
         } else {
-            // Create search dfas for the new regex string.
-            self.search_state.dfas = RegexSearch::new(regex).ok();
-
             // Update search highlighting.
             self.goto_match(MAX_SEARCH_WHILE_TYPING);
         }
@@ -862,54 +839,8 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
     }
 
     /// Jump to the first regex match from the search origin.
-    fn goto_match(&mut self, mut limit: Option<usize>) {
-        let dfas = match &self.search_state.dfas {
-            Some(dfas) => dfas,
-            None => return,
-        };
-
-        // Limit search only when enough lines are available to run into the limit.
-        limit = limit.filter(|&limit| limit <= self.terminal.total_lines());
-
-        // Jump to the next match.
-        let direction = self.search_state.direction;
-        let clamped_origin = self.search_state.origin.grid_clamp(self.terminal, Boundary::Grid);
-        match self.terminal.search_next(dfas, clamped_origin, direction, Side::Left, limit) {
-            Some(regex_match) => {
-                let old_offset = self.terminal.grid().display_offset() as i32;
-
-                if !self.terminal.mode().contains(TermMode::VI) {
-                    // Select the match when vi mode is not active.
-                    self.terminal.scroll_to_point(*regex_match.start());
-                }
-
-                // Update the focused match.
-                self.search_state.focused_match = Some(regex_match);
-
-                // Store number of lines the viewport had to be moved.
-                let display_offset = self.terminal.grid().display_offset();
-                self.search_state.display_offset_delta += old_offset - display_offset as i32;
-
-                // Since we found a result, we require no delayed re-search.
-                let timer_id = TimerId::new(Topic::DelayedSearch, self.display.window.id());
-                self.scheduler.unschedule(timer_id);
-            },
-            // Reset viewport only when we know there is no match, to prevent unnecessary jumping.
-            None if limit.is_none() => self.search_reset_state(),
-            None => {
-                // Schedule delayed search if we ran into our search limit.
-                let timer_id = TimerId::new(Topic::DelayedSearch, self.display.window.id());
-                if !self.scheduler.scheduled(timer_id) {
-                    let event = Event::new(EventType::SearchNext, self.display.window.id());
-                    self.scheduler.schedule(event, TYPING_SEARCH_DELAY, false, timer_id);
-                }
-
-                // Clear focused match.
-                self.search_state.focused_match = None;
-            },
-        }
-
-        *self.dirty = true;
+    fn goto_match(&mut self, _: Option<usize>) {
+        // TODO: remove
     }
 
     /// Cleanup the search state.
