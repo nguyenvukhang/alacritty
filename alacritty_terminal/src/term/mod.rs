@@ -14,11 +14,10 @@ use crate::ansi::{
 use crate::config::Config;
 use crate::event::{Event, EventListener};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
-use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
+use crate::index::{self, Boundary, Column, Direction, Line, Point};
 use crate::selection::{Selection, SelectionRange, SelectionType};
 use crate::term::cell::{Cell, Flags, Hyperlink, LineLength};
 use crate::term::color::{Colors, Rgb};
-use crate::vi_mode::{ViModeCursor, ViMotion};
 
 pub mod cell;
 pub mod color;
@@ -163,9 +162,6 @@ struct TermDamageState {
     /// Old terminal cursor point.
     last_cursor: Point,
 
-    /// Last Vi cursor point.
-    last_vi_cursor_point: Option<Point<usize>>,
-
     /// Old selection range.
     last_selection: Option<SelectionRange>,
 }
@@ -179,7 +175,6 @@ impl TermDamageState {
             is_fully_damaged: true,
             lines,
             last_cursor: Default::default(),
-            last_vi_cursor_point: Default::default(),
             last_selection: Default::default(),
         }
     }
@@ -188,7 +183,6 @@ impl TermDamageState {
     fn resize(&mut self, num_cols: usize, num_lines: usize) {
         // Reset point, so old cursor won't end up outside of the viewport.
         self.last_cursor = Default::default();
-        self.last_vi_cursor_point = None;
         self.last_selection = None;
         self.is_fully_damaged = true;
 
@@ -245,9 +239,6 @@ pub struct Term<T> {
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
 
-    /// Cursor for keyboard selection.
-    pub vi_mode_cursor: ViModeCursor,
-
     pub selection: Option<Selection>,
 
     /// Currently active grid.
@@ -287,9 +278,6 @@ pub struct Term<T> {
     /// Default style for resetting the cursor.
     default_cursor_style: CursorStyle,
 
-    /// Style of the vi mode cursor.
-    vi_mode_cursor_style: Option<CursorStyle>,
-
     /// Proxy for sending events to the event loop.
     event_proxy: T,
 
@@ -313,13 +301,6 @@ impl<T> Term<T> {
         let old_display_offset = self.grid.display_offset();
         self.grid.scroll_display(scroll);
         self.event_proxy.send_event(Event::MouseCursorDirty);
-
-        // Clamp vi mode cursor to the viewport.
-        let viewport_start = -(self.grid.display_offset() as i32);
-        let viewport_end = viewport_start + self.bottommost_line().0;
-        let vi_cursor_line = &mut self.vi_mode_cursor.point.line.0;
-        *vi_cursor_line = cmp::min(viewport_end, cmp::max(viewport_start, *vi_cursor_line));
-        self.vi_mode_recompute_selection();
 
         // Damage everything if display offset changed.
         if old_display_offset != self.grid().display_offset() {
@@ -346,7 +327,6 @@ impl<T> Term<T> {
             grid,
             inactive_grid: alt,
             active_charset: Default::default(),
-            vi_mode_cursor: Default::default(),
             tabs,
             mode: Default::default(),
             scroll_region,
@@ -354,7 +334,6 @@ impl<T> Term<T> {
             semantic_escape_chars: config.selection.semantic_escape_chars.to_owned(),
             cursor_style: None,
             default_cursor_style: config.cursor.style(),
-            vi_mode_cursor_style: config.cursor.vi_mode_style(),
             event_proxy,
             is_focused: true,
             title: None,
@@ -375,16 +354,9 @@ impl<T> Term<T> {
         // Update tracking of cursor, selection, and vi mode cursor.
 
         let display_offset = self.grid().display_offset();
-        let vi_cursor_point = if self.mode.contains(TermMode::VI) {
-            point_to_viewport(display_offset, self.vi_mode_cursor.point)
-        } else {
-            None
-        };
 
         let previous_cursor = mem::replace(&mut self.damage.last_cursor, self.grid.cursor.point);
         let previous_selection = mem::replace(&mut self.damage.last_selection, selection);
-        let previous_vi_cursor_point =
-            mem::replace(&mut self.damage.last_vi_cursor_point, vi_cursor_point);
 
         // Early return if the entire terminal is damaged.
         if self.damage.is_fully_damaged {
@@ -401,17 +373,6 @@ impl<T> Term<T> {
 
         // Always damage current cursor.
         self.damage_cursor();
-
-        // Vi mode doesn't update the terminal content, thus only last vi cursor position and the
-        // new one should be damaged.
-        if let Some(previous_vi_cursor_point) = previous_vi_cursor_point {
-            self.damage.damage_point(previous_vi_cursor_point)
-        }
-
-        // Damage Vi cursor if it's present.
-        if let Some(vi_cursor_point) = self.damage.last_vi_cursor_point {
-            self.damage.damage_point(vi_cursor_point);
-        }
 
         if self.damage.last_selection != previous_selection {
             for selection in self.damage.last_selection.into_iter().chain(previous_selection) {
@@ -444,7 +405,6 @@ impl<T> Term<T> {
     {
         self.semantic_escape_chars = config.selection.semantic_escape_chars.to_owned();
         self.default_cursor_style = config.cursor.style();
-        self.vi_mode_cursor_style = config.cursor.vi_mode_style();
 
         let title_event = match &self.title {
             Some(title) => Event::Title(title.clone()),
@@ -609,7 +569,6 @@ impl<T> Term<T> {
         let mut delta = num_lines as i32 - old_lines as i32;
         let min_delta = cmp::min(0, num_lines as i32 - self.grid.cursor.point.line.0 - 1);
         delta = cmp::min(cmp::max(delta, min_delta), history_size as i32);
-        self.vi_mode_cursor.point.line += delta;
 
         let is_alt = self.mode.contains(TermMode::ALT_SCREEN);
         self.grid.resize(!is_alt, num_lines, num_cols);
@@ -627,13 +586,9 @@ impl<T> Term<T> {
             self.selection = selection.rotate(self, &range, -delta);
         }
 
-        // Clamp vi cursor to viewport.
-        let vi_point = self.vi_mode_cursor.point;
-        let viewport_top = Line(-(self.grid.display_offset() as i32));
-        let viewport_bottom = viewport_top + self.bottommost_line();
-        self.vi_mode_cursor.point.line =
-            cmp::max(cmp::min(vi_point.line, viewport_bottom), viewport_top);
-        self.vi_mode_cursor.point.column = cmp::min(vi_point.column, self.last_column());
+        let is_alt = self.mode.contains(TermMode::ALT_SCREEN);
+        self.grid.resize(!is_alt, num_lines, num_cols);
+        self.inactive_grid.resize(is_alt, num_lines, num_cols);
 
         // Reset scrolling region.
         self.scroll_region = Line(0)..Line(self.screen_lines() as i32);
@@ -684,12 +639,6 @@ impl<T> Term<T> {
         self.selection =
             self.selection.take().and_then(|s| s.rotate(self, &region, -(lines as i32)));
 
-        // Scroll vi mode cursor.
-        let line = &mut self.vi_mode_cursor.point.line;
-        if region.start <= *line && region.end > *line {
-            *line = cmp::min(*line + lines, region.end - 1);
-        }
-
         // Scroll between origin and bottom
         self.grid.scroll_down(&region, lines);
         self.mark_fully_damaged();
@@ -712,13 +661,6 @@ impl<T> Term<T> {
 
         self.grid.scroll_up(&region, lines);
 
-        // Scroll vi mode cursor.
-        let viewport_top = Line(-(self.grid.display_offset() as i32));
-        let top = if region.start == 0 { viewport_top } else { region.start };
-        let line = &mut self.vi_mode_cursor.point.line;
-        if (top <= *line) && region.end > *line {
-            *line = cmp::max(*line - lines, top);
-        }
         self.mark_fully_damaged();
     }
 
@@ -741,76 +683,6 @@ impl<T> Term<T> {
         T: EventListener,
     {
         self.event_proxy.send_event(Event::Exit);
-    }
-
-    /// Toggle the vi mode.
-    #[inline]
-    pub fn toggle_vi_mode(&mut self)
-    where
-        T: EventListener,
-    {
-        self.mode ^= TermMode::VI;
-
-        if self.mode.contains(TermMode::VI) {
-            let display_offset = self.grid.display_offset() as i32;
-            if self.grid.cursor.point.line > self.bottommost_line() - display_offset {
-                // Move cursor to top-left if terminal cursor is not visible.
-                let point = Point::new(Line(-display_offset), Column(0));
-                self.vi_mode_cursor = ViModeCursor::new(point);
-            } else {
-                // Reset vi mode cursor position to match primary cursor.
-                self.vi_mode_cursor = ViModeCursor::new(self.grid.cursor.point);
-            }
-        }
-
-        // Update UI about cursor blinking state changes.
-        self.event_proxy.send_event(Event::CursorBlinkingChange);
-    }
-
-    /// Move vi mode cursor.
-    #[inline]
-    pub fn vi_motion(&mut self, motion: ViMotion)
-    where
-        T: EventListener,
-    {
-        // Require vi mode to be active.
-        if !self.mode.contains(TermMode::VI) {
-            return;
-        }
-
-        // Move cursor.
-        self.vi_mode_cursor = self.vi_mode_cursor.motion(self, motion);
-        self.vi_mode_recompute_selection();
-    }
-
-    /// Move vi cursor to a point in the grid.
-    #[inline]
-    pub fn vi_goto_point(&mut self, point: Point)
-    where
-        T: EventListener,
-    {
-        // Move viewport to make point visible.
-        self.scroll_to_point(point);
-
-        // Move vi cursor to the point.
-        self.vi_mode_cursor.point = point;
-
-        self.vi_mode_recompute_selection();
-    }
-
-    /// Update the active selection to match the vi mode cursor position.
-    #[inline]
-    fn vi_mode_recompute_selection(&mut self) {
-        // Require vi mode to be active.
-        if !self.mode.contains(TermMode::VI) {
-            return;
-        }
-
-        // Update only if non-empty selection is present.
-        if let Some(selection) = self.selection.as_mut().filter(|s| !s.is_empty()) {
-            selection.update(self.vi_mode_cursor.point, Side::Left);
-            selection.include_all();
-        }
     }
 
     /// Scroll display to point if it is outside of viewport.
@@ -868,13 +740,7 @@ impl<T> Term<T> {
     /// While vi mode is active, this will automatically return the vi mode cursor style.
     #[inline]
     pub fn cursor_style(&self) -> CursorStyle {
-        let cursor_style = self.cursor_style.unwrap_or(self.default_cursor_style);
-
-        if self.mode.contains(TermMode::VI) {
-            self.vi_mode_cursor_style.unwrap_or(cursor_style)
-        } else {
-            cursor_style
-        }
+        self.cursor_style.unwrap_or(self.default_cursor_style)
     }
 
     pub fn colors(&self) -> &Colors {
@@ -1598,24 +1464,13 @@ impl<T: EventListener> Handler for Term<T> {
                 if self.mode.contains(TermMode::ALT_SCREEN) {
                     self.grid.reset_region(..);
                 } else {
-                    let old_offset = self.grid.display_offset();
-
                     self.grid.clear_viewport();
-
-                    // Compute number of lines scrolled by clearing the viewport.
-                    let lines = self.grid.display_offset().saturating_sub(old_offset);
-
-                    self.vi_mode_cursor.point.line =
-                        (self.vi_mode_cursor.point.line - lines).grid_clamp(self, Boundary::Grid);
                 }
 
                 self.selection = None;
             },
             ansi::ClearMode::Saved if self.history_size() > 0 => {
                 self.grid.clear_history();
-
-                self.vi_mode_cursor.point.line =
-                    self.vi_mode_cursor.point.line.grid_clamp(self, Boundary::Cursor);
 
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(..Line(0)));
             },
@@ -1654,7 +1509,6 @@ impl<T: EventListener> Handler for Term<T> {
         self.title_stack = Vec::new();
         self.title = None;
         self.selection = None;
-        self.vi_mode_cursor = Default::default();
 
         // Preserve vi mode across resets.
         self.mode &= TermMode::VI;
@@ -2036,15 +1890,13 @@ pub struct RenderableCursor {
 
 impl RenderableCursor {
     fn new<T>(term: &Term<T>) -> Self {
-        // Cursor position.
-        let vi_mode = term.mode().contains(TermMode::VI);
-        let mut point = if vi_mode { term.vi_mode_cursor.point } else { term.grid.cursor.point };
+        let mut point = term.grid.cursor.point;
         if term.grid[point].flags.contains(Flags::WIDE_CHAR_SPACER) {
             point.column -= 1;
         }
 
         // Cursor shape.
-        let shape = if !vi_mode && !term.mode().contains(TermMode::SHOW_CURSOR) {
+        let shape = if !term.mode().contains(TermMode::SHOW_CURSOR) {
             CursorShape::Hidden
         } else {
             term.cursor_style().shape
@@ -2187,62 +2039,6 @@ mod tests {
     use crate::selection::{Selection, SelectionType};
     use crate::term::cell::{Cell, Flags};
     use crate::term::test::TermSize;
-
-    #[test]
-    fn scroll_display_page_up() {
-        let size = TermSize::new(5, 10);
-        let mut term = Term::new(&Config::default(), &size, VoidListener);
-
-        // Create 11 lines of scrollback.
-        for _ in 0..20 {
-            term.newline();
-        }
-
-        // Scrollable amount to top is 11.
-        term.scroll_display(Scroll::PageUp);
-        assert_eq!(term.vi_mode_cursor.point, Point::new(Line(-1), Column(0)));
-        assert_eq!(term.grid.display_offset(), 10);
-
-        // Scrollable amount to top is 1.
-        term.scroll_display(Scroll::PageUp);
-        assert_eq!(term.vi_mode_cursor.point, Point::new(Line(-2), Column(0)));
-        assert_eq!(term.grid.display_offset(), 11);
-
-        // Scrollable amount to top is 0.
-        term.scroll_display(Scroll::PageUp);
-        assert_eq!(term.vi_mode_cursor.point, Point::new(Line(-2), Column(0)));
-        assert_eq!(term.grid.display_offset(), 11);
-    }
-
-    #[test]
-    fn scroll_display_page_down() {
-        let size = TermSize::new(5, 10);
-        let mut term = Term::new(&Config::default(), &size, VoidListener);
-
-        // Create 11 lines of scrollback.
-        for _ in 0..20 {
-            term.newline();
-        }
-
-        // Change display_offset to topmost.
-        term.grid_mut().scroll_display(Scroll::Top);
-        term.vi_mode_cursor = ViModeCursor::new(Point::new(Line(-11), Column(0)));
-
-        // Scrollable amount to bottom is 11.
-        term.scroll_display(Scroll::PageDown);
-        assert_eq!(term.vi_mode_cursor.point, Point::new(Line(-1), Column(0)));
-        assert_eq!(term.grid.display_offset(), 1);
-
-        // Scrollable amount to bottom is 1.
-        term.scroll_display(Scroll::PageDown);
-        assert_eq!(term.vi_mode_cursor.point, Point::new(Line(0), Column(0)));
-        assert_eq!(term.grid.display_offset(), 0);
-
-        // Scrollable amount to bottom is 0.
-        term.scroll_display(Scroll::PageDown);
-        assert_eq!(term.vi_mode_cursor.point, Point::new(Line(0), Column(0)));
-        assert_eq!(term.grid.display_offset(), 0);
-    }
 
     #[test]
     fn simple_selection_works() {
@@ -2448,32 +2244,6 @@ mod tests {
     }
 
     #[test]
-    fn clearing_viewport_with_vi_mode_keeps_history_position() {
-        let size = TermSize::new(10, 20);
-        let mut term = Term::new(&Config::default(), &size, VoidListener);
-
-        // Create 10 lines of scrollback.
-        for _ in 0..29 {
-            term.newline();
-        }
-
-        // Enable vi mode.
-        term.toggle_vi_mode();
-
-        // Change the display area and the vi cursor position.
-        term.scroll_display(Scroll::Top);
-        term.vi_mode_cursor.point = Point::new(Line(-5), Column(3));
-
-        assert_eq!(term.grid.display_offset(), 10);
-
-        // Clear the viewport.
-        term.clear_screen(ansi::ClearMode::All);
-
-        assert_eq!(term.grid.display_offset(), 10);
-        assert_eq!(term.vi_mode_cursor.point, Point::new(Line(-5), Column(3)));
-    }
-
-    #[test]
     fn clearing_scrollback_resets_display_offset() {
         let size = TermSize::new(10, 20);
         let mut term = Term::new(&Config::default(), &size, VoidListener);
@@ -2492,32 +2262,6 @@ mod tests {
         term.clear_screen(ansi::ClearMode::Saved);
 
         assert_eq!(term.grid.display_offset(), 0);
-    }
-
-    #[test]
-    fn clearing_scrollback_sets_vi_cursor_into_viewport() {
-        let size = TermSize::new(10, 20);
-        let mut term = Term::new(&Config::default(), &size, VoidListener);
-
-        // Create 10 lines of scrollback.
-        for _ in 0..29 {
-            term.newline();
-        }
-
-        // Enable vi mode.
-        term.toggle_vi_mode();
-
-        // Change the display area and the vi cursor position.
-        term.scroll_display(Scroll::Top);
-        term.vi_mode_cursor.point = Point::new(Line(-5), Column(3));
-
-        assert_eq!(term.grid.display_offset(), 10);
-
-        // Clear the scrollback buffer.
-        term.clear_screen(ansi::ClearMode::Saved);
-
-        assert_eq!(term.grid.display_offset(), 0);
-        assert_eq!(term.vi_mode_cursor.point, Point::new(Line(0), Column(3)));
     }
 
     #[test]
@@ -2540,26 +2284,6 @@ mod tests {
         term.grid.truncate();
 
         assert_eq!(term.grid, scrolled_grid);
-    }
-
-    #[test]
-    fn vi_cursor_keep_pos_on_scrollback_buffer() {
-        let size = TermSize::new(5, 10);
-        let mut term = Term::new(&Config::default(), &size, VoidListener);
-
-        // Create 11 lines of scrollback.
-        for _ in 0..20 {
-            term.newline();
-        }
-
-        // Enable vi mode.
-        term.toggle_vi_mode();
-
-        term.scroll_display(Scroll::Top);
-        term.vi_mode_cursor.point.line = Line(-11);
-
-        term.linefeed();
-        assert_eq!(term.vi_mode_cursor.point.line, Line(-12));
     }
 
     #[test]
@@ -2652,99 +2376,6 @@ mod tests {
 
         assert_eq!(term.history_size(), 15);
         assert_eq!(term.grid.cursor.point, Point::new(Line(4), Column(0)));
-    }
-
-    #[test]
-    fn damage_public_usage() {
-        let size = TermSize::new(10, 10);
-        let mut term = Term::new(&Config::default(), &size, VoidListener);
-        // Reset terminal for partial damage tests since it's initialized as fully damaged.
-        term.reset_damage();
-
-        // Test that we damage input form [`Term::input`].
-
-        let left = term.grid.cursor.point.column.0;
-        term.input('d');
-        term.input('a');
-        term.input('m');
-        term.input('a');
-        term.input('g');
-        term.input('e');
-        let right = term.grid.cursor.point.column.0;
-
-        let mut damaged_lines = match term.damage(None) {
-            TermDamage::Full => panic!("Expected partial damage, however got Full"),
-            TermDamage::Partial(damaged_lines) => damaged_lines,
-        };
-        assert_eq!(damaged_lines.next(), Some(LineDamageBounds { line: 0, left, right }));
-        assert_eq!(damaged_lines.next(), None);
-        term.reset_damage();
-
-        // Check that selection we've passed was properly damaged.
-
-        let line = 1;
-        let left = 0;
-        let right = term.columns() - 1;
-        let mut selection =
-            Selection::new(SelectionType::Block, Point::new(Line(line), Column(3)), Side::Left);
-        selection.update(Point::new(Line(line), Column(5)), Side::Left);
-        let selection_range = selection.to_range(&term);
-
-        let mut damaged_lines = match term.damage(selection_range) {
-            TermDamage::Full => panic!("Expected partial damage, however got Full"),
-            TermDamage::Partial(damaged_lines) => damaged_lines,
-        };
-        let line = line as usize;
-        // Skip cursor damage information, since we're just testing selection.
-        damaged_lines.next();
-        assert_eq!(damaged_lines.next(), Some(LineDamageBounds { line, left, right }));
-        assert_eq!(damaged_lines.next(), None);
-        term.reset_damage();
-
-        // Check that existing selection gets damaged when it is removed.
-
-        let mut damaged_lines = match term.damage(None) {
-            TermDamage::Full => panic!("Expected partial damage, however got Full"),
-            TermDamage::Partial(damaged_lines) => damaged_lines,
-        };
-        // Skip cursor damage information, since we're just testing selection clearing.
-        damaged_lines.next();
-        assert_eq!(damaged_lines.next(), Some(LineDamageBounds { line, left, right }));
-        assert_eq!(damaged_lines.next(), None);
-        term.reset_damage();
-
-        // Check that `Vi` cursor in vi mode is being always damaged.
-
-        term.toggle_vi_mode();
-        // Put Vi cursor to a different location than normal cursor.
-        term.vi_goto_point(Point::new(Line(5), Column(5)));
-        // Reset damage, so the damage information from `vi_goto_point` won't affect test.
-        term.reset_damage();
-        let vi_cursor_point = term.vi_mode_cursor.point;
-        let line = vi_cursor_point.line.0 as usize;
-        let left = vi_cursor_point.column.0;
-        let right = left;
-
-        let mut damaged_lines = match term.damage(None) {
-            TermDamage::Full => panic!("Expected partial damage, however got Full"),
-            TermDamage::Partial(damaged_lines) => damaged_lines,
-        };
-        // Skip cursor damage information, since we're just testing Vi cursor.
-        damaged_lines.next();
-        assert_eq!(damaged_lines.next(), Some(LineDamageBounds { line, left, right }));
-        assert_eq!(damaged_lines.next(), None);
-
-        // Ensure that old Vi cursor got damaged as well.
-        term.reset_damage();
-        term.toggle_vi_mode();
-        let mut damaged_lines = match term.damage(None) {
-            TermDamage::Full => panic!("Expected partial damage, however got Full"),
-            TermDamage::Partial(damaged_lines) => damaged_lines,
-        };
-        // Skip cursor damage information, since we're just testing Vi cursor.
-        damaged_lines.next();
-        assert_eq!(damaged_lines.next(), Some(LineDamageBounds { line, left, right }));
-        assert_eq!(damaged_lines.next(), None);
     }
 
     #[test]

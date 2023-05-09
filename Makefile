@@ -26,7 +26,8 @@ vpath $(TARGET) $(RELEASE_DIR)
 vpath $(APP_NAME) $(APP_DIR)
 vpath $(DMG_NAME) $(APP_DIR)
 
-all: help
+current:
+	cargo build
 
 help: ## Print this help message
 	@grep -E '^[a-zA-Z._-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
@@ -75,7 +76,19 @@ install-universal: $(INSTALL)-native ## Mount universal disk image
 $(INSTALL)-%: $(DMG_NAME)-%
 	@open $(DMG_DIR)/$(DMG_NAME)
 
-.PHONY: app binary clean dmg install $(TARGET) $(TARGET)-universal
+all:
+	cargo build --release
+	rm -f /Applications/Alacritty.app/Contents/MacOS/alacritty
+	cp ./target/release/alacritty /Applications/Alacritty.app/Contents/MacOS/alacritty
+
+size:
+	@wc -c /Applications/Alacritty.app/Contents/MacOS/alacritty
+	@exa -l /Applications/Alacritty.app/Contents/MacOS/alacritty
+
+run:
+	./target/debug/alacritty
+
+.PHONY: app binary clean dmg install $(TARGET) $(TARGET)-universal khang
 
 clean: ## Remove all build artifacts
 	@cargo clean

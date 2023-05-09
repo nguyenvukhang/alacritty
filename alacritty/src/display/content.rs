@@ -10,7 +10,7 @@ use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::term::color::{CellRgb, Rgb};
 use alacritty_terminal::term::search::{Match, RegexSearch};
-use alacritty_terminal::term::{self, RenderableContent as TerminalContent, Term, TermMode};
+use alacritty_terminal::term::{self, RenderableContent as TerminalContent, Term};
 
 use crate::config::UiConfig;
 use crate::display::color::{List, DIM_FACTOR};
@@ -110,11 +110,7 @@ impl<'a> RenderableContent<'a> {
     /// Assemble the information required to render the terminal cursor.
     fn renderable_cursor(&mut self, cell: &RenderableCell) -> RenderableCursor {
         // Cursor colors.
-        let color = if self.terminal_content.mode.contains(TermMode::VI) {
-            self.config.colors.vi_mode_cursor
-        } else {
-            self.config.colors.cursor
-        };
+        let color = self.config.colors.cursor;
         let cursor_color =
             self.terminal_content.colors[NamedColor::Cursor].map_or(color.background, CellRgb::Rgb);
         let text_color = color.foreground;

@@ -27,14 +27,13 @@ use winit::window::CursorIcon;
 use alacritty_terminal::ansi::{ClearMode, Handler};
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Boundary, Column, Direction, Point, Side};
+use alacritty_terminal::index::{Column, Direction, Point, Side};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{ClipboardType, Term, TermMode};
-use alacritty_terminal::vi_mode::ViMotion;
 
 use crate::clipboard::Clipboard;
-use crate::config::{Action, BindingMode, Key, MouseAction, SearchAction, UiConfig, ViAction};
+use crate::config::{Action, BindingMode, Key, MouseAction, SearchAction, UiConfig};
 use crate::display::hint::HintMatch;
 use crate::display::window::Window;
 use crate::display::{Display, SizeInfo};
@@ -115,7 +114,6 @@ pub trait ActionContext<T: EventListener> {
     fn search_direction(&self) -> Direction;
     fn search_active(&self) -> bool;
     fn on_typing_start(&mut self) {}
-    fn toggle_vi_mode(&mut self) {}
     fn hint_input(&mut self, _character: char) {}
     fn trigger_hint(&mut self, _hint: &HintMatch) {}
     fn expand_selection(&mut self) {}
@@ -125,21 +123,6 @@ pub trait ActionContext<T: EventListener> {
         I: IntoIterator<Item = S> + Debug + Copy,
         S: AsRef<OsStr>,
     {
-    }
-}
-
-impl Action {
-    fn toggle_selection<T, A>(ctx: &mut A, ty: SelectionType)
-    where
-        A: ActionContext<T>,
-        T: EventListener,
-    {
-        ctx.toggle_selection(ty, ctx.terminal().vi_mode_cursor.point, Side::Left);
-
-        // Make sure initial selection is not empty.
-        if let Some(selection) = &mut ctx.terminal_mut().selection {
-            selection.include_all();
-        }
     }
 }
 
@@ -161,94 +144,6 @@ impl<T: EventListener> Execute<T> for Action {
             Action::Hint(hint) => {
                 ctx.display().hint_state.start(hint.clone());
                 ctx.mark_dirty();
-            },
-            Action::ToggleViMode => {
-                ctx.on_typing_start();
-                ctx.toggle_vi_mode()
-            },
-            Action::ViMotion(motion) => {
-                ctx.on_typing_start();
-                ctx.terminal_mut().vi_motion(*motion);
-                ctx.mark_dirty();
-            },
-            Action::Vi(ViAction::ToggleNormalSelection) => {
-                Self::toggle_selection(ctx, SelectionType::Simple);
-            },
-            Action::Vi(ViAction::ToggleLineSelection) => {
-                Self::toggle_selection(ctx, SelectionType::Lines);
-            },
-            Action::Vi(ViAction::ToggleBlockSelection) => {
-                Self::toggle_selection(ctx, SelectionType::Block);
-            },
-            Action::Vi(ViAction::ToggleSemanticSelection) => {
-                Self::toggle_selection(ctx, SelectionType::Semantic);
-            },
-            Action::Vi(ViAction::Open) => {
-                let hint = ctx.display().vi_highlighted_hint.take();
-                if let Some(hint) = &hint {
-                    ctx.mouse_mut().block_hint_launcher = false;
-                    ctx.trigger_hint(hint);
-                }
-                ctx.display().vi_highlighted_hint = hint;
-            },
-            Action::Vi(ViAction::SearchNext) => {
-                ctx.on_typing_start();
-
-                let terminal = ctx.terminal();
-                let direction = ctx.search_direction();
-                let vi_point = terminal.vi_mode_cursor.point;
-                let origin = match direction {
-                    Direction::Right => vi_point.add(terminal, Boundary::None, 1),
-                    Direction::Left => vi_point.sub(terminal, Boundary::None, 1),
-                };
-
-                if let Some(regex_match) = ctx.search_next(origin, direction, Side::Left) {
-                    ctx.terminal_mut().vi_goto_point(*regex_match.start());
-                    ctx.mark_dirty();
-                }
-            },
-            Action::Vi(ViAction::SearchPrevious) => {
-                ctx.on_typing_start();
-
-                let terminal = ctx.terminal();
-                let direction = ctx.search_direction().opposite();
-                let vi_point = terminal.vi_mode_cursor.point;
-                let origin = match direction {
-                    Direction::Right => vi_point.add(terminal, Boundary::None, 1),
-                    Direction::Left => vi_point.sub(terminal, Boundary::None, 1),
-                };
-
-                if let Some(regex_match) = ctx.search_next(origin, direction, Side::Left) {
-                    ctx.terminal_mut().vi_goto_point(*regex_match.start());
-                    ctx.mark_dirty();
-                }
-            },
-            Action::Vi(ViAction::SearchStart) => {
-                let terminal = ctx.terminal();
-                let origin = terminal.vi_mode_cursor.point.sub(terminal, Boundary::None, 1);
-
-                if let Some(regex_match) = ctx.search_next(origin, Direction::Left, Side::Left) {
-                    ctx.terminal_mut().vi_goto_point(*regex_match.start());
-                    ctx.mark_dirty();
-                }
-            },
-            Action::Vi(ViAction::SearchEnd) => {
-                let terminal = ctx.terminal();
-                let origin = terminal.vi_mode_cursor.point.add(terminal, Boundary::None, 1);
-
-                if let Some(regex_match) = ctx.search_next(origin, Direction::Right, Side::Right) {
-                    ctx.terminal_mut().vi_goto_point(*regex_match.end());
-                    ctx.mark_dirty();
-                }
-            },
-            Action::Vi(ViAction::CenterAroundViCursor) => {
-                let term = ctx.terminal();
-                let display_offset = term.grid().display_offset() as i32;
-                let target = -display_offset + term.screen_lines() as i32 / 2 - 1;
-                let line = term.vi_mode_cursor.point.line;
-                let scroll_lines = target - line.0;
-
-                ctx.scroll(Scroll::Delta(scroll_lines));
             },
             Action::Search(SearchAction::SearchFocusNext) => {
                 ctx.advance_search_origin(ctx.search_direction());
@@ -298,58 +193,31 @@ impl<T: EventListener> Execute<T> for Action {
             Action::DecreaseFontSize => ctx.change_font_size(FONT_SIZE_STEP * -1.),
             Action::ResetFontSize => ctx.reset_font_size(),
             Action::ScrollPageUp => {
-                // Move vi mode cursor.
-                let term = ctx.terminal_mut();
-                let scroll_lines = term.screen_lines() as i32;
-                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
-
                 ctx.scroll(Scroll::PageUp);
             },
             Action::ScrollPageDown => {
-                // Move vi mode cursor.
-                let term = ctx.terminal_mut();
-                let scroll_lines = -(term.screen_lines() as i32);
-                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
-
                 ctx.scroll(Scroll::PageDown);
             },
             Action::ScrollHalfPageUp => {
                 // Move vi mode cursor.
                 let term = ctx.terminal_mut();
                 let scroll_lines = term.screen_lines() as i32 / 2;
-                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
-
                 ctx.scroll(Scroll::Delta(scroll_lines));
             },
             Action::ScrollHalfPageDown => {
                 // Move vi mode cursor.
                 let term = ctx.terminal_mut();
                 let scroll_lines = -(term.screen_lines() as i32 / 2);
-                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
-
                 ctx.scroll(Scroll::Delta(scroll_lines));
             },
             Action::ScrollLineUp => ctx.scroll(Scroll::Delta(1)),
             Action::ScrollLineDown => ctx.scroll(Scroll::Delta(-1)),
             Action::ScrollToTop => {
                 ctx.scroll(Scroll::Top);
-
-                // Move vi mode cursor.
-                let topmost_line = ctx.terminal().topmost_line();
-                ctx.terminal_mut().vi_mode_cursor.point.line = topmost_line;
-                ctx.terminal_mut().vi_motion(ViMotion::FirstOccupied);
                 ctx.mark_dirty();
             },
             Action::ScrollToBottom => {
                 ctx.scroll(Scroll::Bottom);
-
-                // Move vi mode cursor.
-                let term = ctx.terminal_mut();
-                term.vi_mode_cursor.point.line = term.bottommost_line();
-
-                // Move to beginning twice, to always jump across linewraps.
-                term.vi_motion(ViMotion::FirstOccupied);
-                term.vi_motion(ViMotion::FirstOccupied);
                 ctx.mark_dirty();
             },
             Action::ClearHistory => ctx.terminal_mut().clear_screen(ClearMode::Saved),
@@ -604,12 +472,6 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             },
             ClickState::None => (),
         };
-
-        // Move vi mode cursor to mouse click position.
-        if self.ctx.terminal().mode().contains(TermMode::VI) && !self.ctx.search_active() {
-            self.ctx.terminal_mut().vi_mode_cursor.point = point;
-            self.ctx.mark_dirty();
-        }
     }
 
     fn on_mouse_release(&mut self, button: MouseButton) {

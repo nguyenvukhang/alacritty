@@ -32,7 +32,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::Direction;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Term, TermMode};
+use alacritty_terminal::term::Term;
 use alacritty_terminal::tty;
 
 #[cfg(unix)]
@@ -562,11 +562,7 @@ impl WindowContext {
         // Compute cursor positions before resize.
         let num_lines = terminal.screen_lines();
         let cursor_at_bottom = terminal.grid().cursor.point.line + 1 == num_lines;
-        let origin_at_bottom = if terminal.mode().contains(TermMode::VI) {
-            terminal.vi_mode_cursor.point.line == num_lines - 1
-        } else {
-            search_state.direction == Direction::Left
-        };
+        let origin_at_bottom = search_state.direction == Direction::Left;
 
         display.handle_update(
             terminal,

@@ -8,7 +8,6 @@ use alacritty_terminal::term::color::{CellRgb, Rgb};
 pub struct Colors {
     pub primary: PrimaryColors,
     pub cursor: InvertedCellColors,
-    pub vi_mode_cursor: InvertedCellColors,
     pub selection: InvertedCellColors,
     pub normal: NormalColors,
     pub bright: BrightColors,

@@ -343,9 +343,6 @@ pub struct Display {
     /// Hint highlighted by the mouse.
     pub highlighted_hint: Option<HintMatch>,
 
-    /// Hint highlighted by the vi mode cursor.
-    pub vi_highlighted_hint: Option<HintMatch>,
-
     pub is_wayland: bool,
 
     /// UI cursor visibility for blinking.
@@ -512,7 +509,6 @@ impl Display {
             size_info,
             ime: Ime::new(),
             highlighted_hint: None,
-            vi_highlighted_hint: None,
             is_wayland,
             cursor_hidden: false,
             frame_timer: FrameTimer::new(),
@@ -780,9 +776,6 @@ impl Display {
         let metrics = self.glyph_cache.font_metrics();
         let size_info = self.size_info;
 
-        let vi_mode = terminal.mode().contains(TermMode::VI);
-        let vi_cursor_point = if vi_mode { Some(terminal.vi_mode_cursor.point) } else { None };
-
         if self.collect_damage() {
             self.update_damage(&mut terminal, selection_range, search_state);
         }
@@ -797,8 +790,7 @@ impl Display {
         let mut lines = RenderLines::new();
 
         // Optimize loop hint comparator.
-        let has_highlighted_hint =
-            self.highlighted_hint.is_some() || self.vi_highlighted_hint.is_some();
+        let has_highlighted_hint = self.highlighted_hint.is_some();
 
         // Draw grid.
         {
@@ -810,7 +802,6 @@ impl Display {
 
             let glyph_cache = &mut self.glyph_cache;
             let highlighted_hint = &self.highlighted_hint;
-            let vi_highlighted_hint = &self.vi_highlighted_hint;
 
             self.renderer.draw_cells(
                 &size_info,
@@ -825,9 +816,6 @@ impl Display {
                         if highlighted_hint
                             .as_ref()
                             .map_or(false, |hint| hint.should_highlight(point, hyperlink))
-                            || vi_highlighted_hint
-                                .as_ref()
-                                .map_or(false, |hint| hint.should_highlight(point, hyperlink))
                         {
                             cell.flags.insert(Flags::UNDERLINE);
                         }
@@ -843,14 +831,7 @@ impl Display {
 
         let mut rects = lines.rects(&metrics, &size_info);
 
-        if let Some(vi_cursor_point) = vi_cursor_point {
-            // Indicate vi mode by showing the cursor's position in the top right corner.
-            let line = (-vi_cursor_point.line.0 + size_info.bottommost_line().0) as usize;
-            let obstructed_column = Some(vi_cursor_point)
-                .filter(|point| point.line == -(display_offset as i32))
-                .map(|point| point.column);
-            self.draw_line_indicator(config, total_lines, obstructed_column, line);
-        } else if search_state.regex().is_some() {
+        if search_state.regex().is_some() {
             // Show current display offset in vi-less search to indicate match position.
             self.draw_line_indicator(config, total_lines, None, display_offset);
         };
@@ -970,8 +951,7 @@ impl Display {
 
         // Draw hyperlink uri preview.
         if has_highlighted_hint {
-            let cursor_point = vi_cursor_point.or(Some(cursor_point));
-            self.draw_hyperlink_preview(config, cursor_point, display_offset);
+            self.draw_hyperlink_preview(config, Some(cursor_point), display_offset);
         }
 
         // Frame event should be requested before swapping buffers on Wayland, since it requires
@@ -1020,16 +1000,7 @@ impl Display {
         mouse: &Mouse,
         modifiers: ModifiersState,
     ) -> bool {
-        // Update vi mode cursor hint.
-        let vi_highlighted_hint = if term.mode().contains(TermMode::VI) {
-            let mods = ModifiersState::all();
-            let point = term.vi_mode_cursor.point;
-            hint::highlighted_at(term, config, point, mods)
-        } else {
-            None
-        };
-        let mut dirty = vi_highlighted_hint != self.vi_highlighted_hint;
-        self.vi_highlighted_hint = vi_highlighted_hint;
+        let mut dirty = false;
 
         // Abort if mouse highlighting conditions are not met.
         if !mouse.inside_text_area || !term.selection.as_ref().map_or(true, Selection::is_empty) {
@@ -1189,7 +1160,6 @@ impl Display {
         let uris: Vec<_> = self
             .highlighted_hint
             .iter()
-            .chain(&self.vi_highlighted_hint)
             .filter_map(|hint| hint.hyperlink().map(|hyperlink| hyperlink.uri()))
             .map(|uri| StrShortener::new(uri, num_cols, ShortenDirection::Right, Some(SHORTENER)))
             .collect();
@@ -1351,7 +1321,7 @@ impl Display {
     fn damage_highlighted_hints<T: EventListener>(&self, terminal: &mut Term<T>) {
         let display_offset = terminal.grid().display_offset();
         let last_visible_line = terminal.screen_lines() - 1;
-        for hint in self.highlighted_hint.iter().chain(&self.vi_highlighted_hint) {
+        for hint in self.highlighted_hint.iter() {
             for point in
                 (hint.bounds().start().line.0..=hint.bounds().end().line.0).flat_map(|line| {
                     term::point_to_viewport(display_offset, Point::new(Line(line), Column(0)))

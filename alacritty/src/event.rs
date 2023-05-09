@@ -242,11 +242,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         }
 
         // Update selection.
-        if self.terminal.mode().contains(TermMode::VI)
-            && self.terminal.selection.as_ref().map_or(false, |s| !s.is_empty())
-        {
-            self.update_selection(self.terminal.vi_mode_cursor.point, Side::Right);
-        } else if self.mouse.left_button_state == ElementState::Pressed
+        if self.mouse.left_button_state == ElementState::Pressed
             || self.mouse.right_button_state == ElementState::Pressed
         {
             let display_offset = self.terminal.grid().display_offset();
@@ -297,7 +293,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
         // Move vi cursor and expand selection.
         if self.terminal.mode().contains(TermMode::VI) && !self.search_active() {
-            self.terminal.vi_mode_cursor.point = point;
             selection.include_all();
         }
 
@@ -476,7 +471,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
         // Store original search position as origin and reset location.
         if self.terminal.mode().contains(TermMode::VI) {
-            self.search_state.origin = self.terminal.vi_mode_cursor.point;
             self.search_state.display_offset_delta = 0;
 
             // Adjust origin for content moving upward on search start.
@@ -733,16 +727,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 self.update_selection(*hint_bounds.end(), Side::Right);
                 self.copy_selection(ClipboardType::Selection);
             },
-            // Move the vi mode cursor.
-            HintAction::Action(HintInternalAction::MoveViModeCursor) => {
-                // Enter vi mode if we're not in it already.
-                if !self.terminal.mode().contains(TermMode::VI) {
-                    self.terminal.toggle_vi_mode();
-                }
-
-                self.terminal.vi_goto_point(*hint_bounds.start());
-                self.mark_dirty();
-            },
         }
     }
 
@@ -775,11 +759,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
         selection.ty = selection_type;
         self.update_selection(point, cell_side);
-
-        // Move vi mode cursor to mouse click position.
-        if self.terminal().mode().contains(TermMode::VI) && !self.search_active() {
-            self.terminal_mut().vi_mode_cursor.point = point;
-        }
     }
 
     /// Paste a text into the terminal.
@@ -809,35 +788,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             // style) with a single carriage return (\r, which is what the Enter key produces).
             self.write_to_pty(text.replace("\r\n", "\r").replace('\n', "\r").into_bytes());
         }
-    }
-
-    /// Toggle the vi mode status.
-    #[inline]
-    fn toggle_vi_mode(&mut self) {
-        let was_in_vi_mode = self.terminal.mode().contains(TermMode::VI);
-        if was_in_vi_mode {
-            // If we had search running when leaving Vi mode we should mark terminal fully damaged
-            // to cleanup highlighted results.
-            if self.search_state.dfas.take().is_some() {
-                self.terminal.mark_fully_damaged();
-            } else {
-                // Damage line indicator.
-                self.terminal.damage_line(0, 0, self.terminal.columns() - 1);
-            }
-        } else {
-            self.clear_selection();
-        }
-
-        if self.search_active() {
-            self.cancel_search();
-        }
-
-        // We don't want IME in Vi mode.
-        self.window().set_ime_allowed(was_in_vi_mode);
-
-        self.terminal.toggle_vi_mode();
-
-        *self.dirty = true;
     }
 
     fn message(&self) -> Option<&Message> {
@@ -905,7 +855,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         }
 
         // Reset display offset and cursor position.
-        self.terminal.vi_mode_cursor.point = self.search_state.origin;
         self.terminal.scroll_display(Scroll::Delta(self.search_state.display_offset_delta));
         self.search_state.display_offset_delta = 0;
 
@@ -929,10 +878,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
             Some(regex_match) => {
                 let old_offset = self.terminal.grid().display_offset() as i32;
 
-                if self.terminal.mode().contains(TermMode::VI) {
-                    // Move vi cursor to the start of the match.
-                    self.terminal.vi_goto_point(*regex_match.start());
-                } else {
+                if !self.terminal.mode().contains(TermMode::VI) {
                     // Select the match when vi mode is not active.
                     self.terminal.scroll_to_point(*regex_match.start());
                 }
@@ -968,9 +914,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
 
     /// Cleanup the search state.
     fn exit_search(&mut self) {
-        let vi_mode = self.terminal.mode().contains(TermMode::VI);
-        self.window().set_ime_allowed(!vi_mode);
-
         self.display.pending_update.dirty = true;
         self.search_state.history_index = None;
 
@@ -980,17 +923,12 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
 
     /// Update the cursor blinking state.
     fn update_cursor_blinking(&mut self) {
-        // Get config cursor style.
-        let mut cursor_style = self.config.terminal_config.cursor.style;
-        let vi_mode = self.terminal.mode().contains(TermMode::VI);
-        if vi_mode {
-            cursor_style = self.config.terminal_config.cursor.vi_mode_style.unwrap_or(cursor_style);
-        }
+        let cursor_style = self.config.terminal_config.cursor.style;
 
         // Check terminal cursor style.
         let terminal_blinking = self.terminal.cursor_style().blinking;
         let mut blinking = cursor_style.blinking_override().unwrap_or(terminal_blinking);
-        blinking &= (vi_mode || self.terminal().mode().contains(TermMode::SHOW_CURSOR))
+        blinking &= (self.terminal().mode().contains(TermMode::SHOW_CURSOR))
             && self.display().ime.preedit().is_none();
 
         // Update cursor blinking state.

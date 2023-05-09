@@ -1,0 +1,5 @@
+*.recording
+*/tests/ref/*
+alacritty.yml
+*.rtf
+*.md
