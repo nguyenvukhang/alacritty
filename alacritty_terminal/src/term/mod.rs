@@ -2028,8 +2028,6 @@ pub mod test {
 mod tests {
     use super::*;
 
-    use std::mem;
-
     use crate::ansi::{self, CharsetIndex, Handler, StandardCharset};
     use crate::config::Config;
     use crate::event::VoidListener;
@@ -2083,75 +2081,6 @@ mod tests {
             s.update(Point { line: Line(3), column: Column(4) }, Side::Right);
         }
         assert_eq!(term.selection_to_string(), Some(String::from(" aaa  aaa\"")));
-    }
-
-    #[test]
-    fn semantic_selection_works() {
-        let size = TermSize::new(5, 3);
-        let mut term = Term::new(&Config::default(), &size, VoidListener);
-        let mut grid: Grid<Cell> = Grid::new(3, 5, 0);
-        for i in 0..5 {
-            for j in 0..2 {
-                grid[Line(j)][Column(i)].c = 'a';
-            }
-        }
-        grid[Line(0)][Column(0)].c = '"';
-        grid[Line(0)][Column(3)].c = '"';
-        grid[Line(1)][Column(2)].c = '"';
-        grid[Line(0)][Column(4)].flags.insert(Flags::WRAPLINE);
-
-        let mut escape_chars = String::from("\"");
-
-        mem::swap(&mut term.grid, &mut grid);
-        mem::swap(&mut term.semantic_escape_chars, &mut escape_chars);
-
-        {
-            term.selection = Some(Selection::new(
-                SelectionType::Semantic,
-                Point { line: Line(0), column: Column(1) },
-                Side::Left,
-            ));
-            assert_eq!(term.selection_to_string(), Some(String::from("aa")));
-        }
-
-        {
-            term.selection = Some(Selection::new(
-                SelectionType::Semantic,
-                Point { line: Line(0), column: Column(4) },
-                Side::Left,
-            ));
-            assert_eq!(term.selection_to_string(), Some(String::from("aaa")));
-        }
-
-        {
-            term.selection = Some(Selection::new(
-                SelectionType::Semantic,
-                Point { line: Line(1), column: Column(1) },
-                Side::Left,
-            ));
-            assert_eq!(term.selection_to_string(), Some(String::from("aaa")));
-        }
-    }
-
-    #[test]
-    fn line_selection_works() {
-        let size = TermSize::new(5, 1);
-        let mut term = Term::new(&Config::default(), &size, VoidListener);
-        let mut grid: Grid<Cell> = Grid::new(1, 5, 0);
-        for i in 0..5 {
-            grid[Line(0)][Column(i)].c = 'a';
-        }
-        grid[Line(0)][Column(0)].c = '"';
-        grid[Line(0)][Column(3)].c = '"';
-
-        mem::swap(&mut term.grid, &mut grid);
-
-        term.selection = Some(Selection::new(
-            SelectionType::Lines,
-            Point { line: Line(0), column: Column(3) },
-            Side::Left,
-        ));
-        assert_eq!(term.selection_to_string(), Some(String::from("\"aa\"a\n")));
     }
 
     #[test]

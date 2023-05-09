@@ -14,8 +14,6 @@ use alacritty_config_derive::{ConfigDeserialize, SerdeReplace};
 use alacritty_terminal::config::Program;
 use alacritty_terminal::term::TermMode;
 
-use crate::config::ui_config::Hint;
-
 /// Describes a state and action to take in that state.
 ///
 /// This is the shared component of `MouseBinding` and `KeyBinding`.
@@ -90,10 +88,6 @@ pub enum Action {
     /// Run given command.
     #[config(skip)]
     Command(Program),
-
-    /// Regex keyboard hints.
-    #[config(skip)]
-    Hint(Hint),
 
     /// Perform search mode action.
     #[config(skip)]

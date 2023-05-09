@@ -44,12 +44,10 @@ use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 use crate::cli::IpcConfig;
 use crate::cli::{Options as CliOptions, WindowOptions};
 use crate::clipboard::Clipboard;
-use crate::config::ui_config::{HintAction, HintInternalAction};
 use crate::config::{self, UiConfig};
 #[cfg(not(windows))]
 use crate::daemon::foreground_process_path;
 use crate::daemon::spawn_daemon;
-use crate::display::hint::HintMatch;
 use crate::display::window::Window;
 use crate::display::{Display, Preedit, SizeInfo};
 use crate::input::{self, ActionContext as _, FONT_SIZE_STEP};
@@ -59,9 +57,6 @@ use crate::window_context::WindowContext;
 
 /// Duration after the last user input until an unlimited search is performed.
 pub const TYPING_SEARCH_DELAY: Duration = Duration::from_millis(500);
-
-/// Maximum number of lines for the blocking search while still typing the search regex.
-const MAX_SEARCH_WHILE_TYPING: Option<usize> = Some(1000);
 
 /// Maximum number of search terms stored in the history.
 const MAX_SEARCH_HISTORY_SIZE: usize = 255;
@@ -104,7 +99,6 @@ pub enum EventType {
     IpcConfig(IpcConfig),
     BlinkCursor,
     BlinkCursorTimeout,
-    SearchNext,
     Frame,
 }
 
@@ -481,12 +475,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             return;
         }
 
-        // Force unlimited search if the previous one was interrupted.
-        let timer_id = TimerId::new(Topic::DelayedSearch, self.display.window.id());
-        if self.scheduler.scheduled(timer_id) {
-            self.goto_match(None);
-        }
-
         self.exit_search();
     }
 
@@ -570,7 +558,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     fn advance_search_origin(&mut self, direction: Direction) {
         // Search for the next match using the supplied direction.
         let search_direction = mem::replace(&mut self.search_state.direction, direction);
-        self.goto_match(None);
         self.search_state.direction = search_direction;
     }
 
@@ -608,48 +595,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         // Hide mouse cursor.
         if self.config.mouse.hide_when_typing {
             self.display.window.set_mouse_visible(false);
-        }
-    }
-
-    /// Process a new character for keyboard hints.
-    fn hint_input(&mut self, c: char) {
-        if let Some(hint) = self.display.hint_state.keyboard_input(c) {
-            self.mouse.block_hint_launcher = false;
-            self.trigger_hint(&hint);
-        }
-        *self.dirty = true;
-    }
-
-    /// Trigger a hint action.
-    fn trigger_hint(&mut self, hint: &HintMatch) {
-        if self.mouse.block_hint_launcher {
-            return;
-        }
-
-        let text = match hint.hyperlink() {
-            Some(hyperlink) => hyperlink.uri().to_owned(),
-            None => "".to_string(), // TODO: remove?
-        };
-
-        match &hint.action() {
-            // Launch an external program.
-            HintAction::Command(command) => {
-                let mut args = command.args().to_vec();
-                args.push(text);
-                self.spawn_daemon(command.program(), &args);
-            },
-            // Copy the text to the clipboard.
-            HintAction::Action(HintInternalAction::Copy) => {
-                self.clipboard.store(ClipboardType::Clipboard, text);
-            },
-            // Write the text to the PTY/search.
-            HintAction::Action(HintInternalAction::Paste) => {
-                self.paste(&text);
-            },
-            // Select the text.
-            HintAction::Action(HintInternalAction::Select) => {
-                self.copy_selection(ClipboardType::Selection);
-            },
         }
     }
 
@@ -749,9 +694,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         if regex.is_empty() {
             // Stop search if there's nothing to search for.
             self.search_reset_state();
-        } else {
-            // Update search highlighting.
-            self.goto_match(MAX_SEARCH_WHILE_TYPING);
         }
 
         *self.dirty = true;
@@ -775,11 +717,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         self.search_state.display_offset_delta = 0;
 
         *self.dirty = true;
-    }
-
-    /// Jump to the first regex match from the search origin.
-    fn goto_match(&mut self, _: Option<usize>) {
-        // TODO: remove
     }
 
     /// Cleanup the search state.
@@ -1004,7 +941,6 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 EventType::Frame => {
                     self.ctx.display.window.has_frame.store(true, Ordering::Relaxed);
                 },
-                EventType::SearchNext => self.ctx.goto_match(None),
                 EventType::Scroll(scroll) => self.ctx.scroll(scroll),
                 EventType::BlinkCursor => {
                     self.ctx.display.cursor_hidden ^= true;
@@ -1135,13 +1071,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         let path: String = path.to_string_lossy().into();
                         self.ctx.paste(&(path + " "));
                     },
-                    WindowEvent::CursorLeft { .. } => {
-                        self.ctx.mouse.inside_text_area = false;
-
-                        if self.ctx.display().highlighted_hint.is_some() {
-                            *self.ctx.dirty = true;
-                        }
-                    },
+                    WindowEvent::CursorLeft { .. } => self.ctx.mouse.inside_text_area = false,
                     WindowEvent::Ime(ime) => match ime {
                         Ime::Commit(text) => {
                             *self.ctx.dirty = true;

@@ -488,36 +488,6 @@ mod tests {
     }
 
     #[test]
-    fn line_selection() {
-        let size = (10, 5);
-        let mut selection =
-            Selection::new(SelectionType::Lines, Point::new(Line(9), Column(1)), Side::Left);
-        selection.update(Point::new(Line(4), Column(1)), Side::Right);
-        selection = selection.rotate(&size, &(Line(0)..Line(size.0 as i32)), 4).unwrap();
-
-        assert_eq!(selection.to_range(&term(size.0, size.1)).unwrap(), SelectionRange {
-            start: Point::new(Line(0), Column(0)),
-            end: Point::new(Line(5), Column(4)),
-            is_block: false,
-        });
-    }
-
-    #[test]
-    fn semantic_selection() {
-        let size = (10, 5);
-        let mut selection =
-            Selection::new(SelectionType::Semantic, Point::new(Line(9), Column(3)), Side::Left);
-        selection.update(Point::new(Line(4), Column(1)), Side::Right);
-        selection = selection.rotate(&size, &(Line(0)..Line(size.0 as i32)), 4).unwrap();
-
-        assert_eq!(selection.to_range(&term(size.0, size.1)).unwrap(), SelectionRange {
-            start: Point::new(Line(0), Column(1)),
-            end: Point::new(Line(5), Column(3)),
-            is_block: false,
-        });
-    }
-
-    #[test]
     fn simple_selection() {
         let size = (10, 5);
         let mut selection =

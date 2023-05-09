@@ -1,6 +1,4 @@
 //! Handle input from winit.
-//!
-//! Certain key combinations should send some escape sequence back to the PTY.
 //! In order to figure that out, state about which modifier keys are pressed
 //! needs to be tracked. Additionally, we need a bit of a state machine to
 //! determine what to do when a non-modifier key is pressed.
@@ -33,7 +31,6 @@ use alacritty_terminal::term::{ClipboardType, Term, TermMode};
 
 use crate::clipboard::Clipboard;
 use crate::config::{Action, BindingMode, Key, MouseAction, SearchAction, UiConfig};
-use crate::display::hint::HintMatch;
 use crate::display::window::Window;
 use crate::display::{Display, SizeInfo};
 use crate::event::{
@@ -112,8 +109,6 @@ pub trait ActionContext<T: EventListener> {
     fn search_direction(&self) -> Direction;
     fn search_active(&self) -> bool;
     fn on_typing_start(&mut self) {}
-    fn hint_input(&mut self, _character: char) {}
-    fn trigger_hint(&mut self, _hint: &HintMatch) {}
     fn expand_selection(&mut self) {}
     fn paste(&mut self, _text: &str) {}
     fn spawn_daemon<I, S>(&self, _program: &str, _args: I)
@@ -139,10 +134,6 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.write_to_pty(s.clone().into_bytes())
             },
             Action::Command(program) => ctx.spawn_daemon(program.program(), program.args()),
-            Action::Hint(hint) => {
-                ctx.display().hint_state.start(hint.clone());
-                ctx.mark_dirty();
-            },
             Action::Search(SearchAction::SearchFocusNext) => {
                 ctx.advance_search_origin(ctx.search_direction());
             },
@@ -485,13 +476,6 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             return;
         }
 
-        // Trigger hints highlighted by the mouse.
-        let hint = self.ctx.display().highlighted_hint.take();
-        if let Some(hint) = hint.as_ref().filter(|_| button == MouseButton::Left) {
-            self.ctx.trigger_hint(hint);
-        }
-        self.ctx.display().highlighted_hint = hint;
-
         let timer_id = TimerId::new(Topic::SelectionScrolling, self.ctx.window().id());
         self.ctx.scheduler_mut().unschedule(timer_id);
 
@@ -781,12 +765,6 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             return;
         }
 
-        // All key bindings are disabled while a hint is being selected.
-        if self.ctx.display().hint_state.active() {
-            *self.ctx.suppress_chars() = false;
-            return;
-        }
-
         // Reset search delay when the user is still typing.
         if self.ctx.search_active() {
             let timer_id = TimerId::new(Topic::DelayedSearch, self.ctx.window().id());
@@ -830,12 +808,6 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
         // Don't insert chars when we have IME running.
         if self.ctx.display().ime.preedit().is_some() {
-            return;
-        }
-
-        // Handle hint selection over anything else.
-        if self.ctx.display().hint_state.active() && !suppress_chars {
-            self.ctx.hint_input(c);
             return;
         }
 

@@ -17,7 +17,6 @@ use log::{debug, info};
 use parking_lot::MutexGuard;
 use serde::{Deserialize, Serialize};
 use winit::dpi::PhysicalSize;
-use winit::window::CursorIcon;
 
 use crossfont::{self, Rasterize, Rasterizer};
 use unicode_width::UnicodeWidthChar;
@@ -26,11 +25,11 @@ use alacritty_terminal::ansi::{CursorShape, NamedColor};
 use alacritty_terminal::config::MAX_SCROLLBACK_LINES;
 use alacritty_terminal::event::{EventListener, OnResize, WindowSize};
 use alacritty_terminal::grid::Dimensions as TermDimensions;
-use alacritty_terminal::index::{Column, Direction, Line, Point};
-use alacritty_terminal::selection::{Selection, SelectionRange};
+use alacritty_terminal::index::{Column, Direction, Point};
+use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Rgb;
-use alacritty_terminal::term::{self, Term, TermDamage, TermMode, MIN_COLUMNS, MIN_SCREEN_LINES};
+use alacritty_terminal::term::{self, Term, TermDamage, MIN_COLUMNS, MIN_SCREEN_LINES};
 
 use crate::config::font::Font;
 use crate::config::window::Dimensions;
@@ -42,10 +41,9 @@ use crate::display::color::List;
 use crate::display::content::{RenderableContent, RenderableCursor};
 use crate::display::cursor::IntoRects;
 use crate::display::damage::RenderDamageIterator;
-use crate::display::hint::{HintMatch, HintState};
 use crate::display::meter::Meter;
 use crate::display::window::Window;
-use crate::event::{Event, EventType, Mouse, SearchState};
+use crate::event::{Event, EventType, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
 use crate::renderer::{self, GlyphCache, Renderer};
@@ -54,7 +52,6 @@ use crate::string::{ShortenDirection, StrShortener};
 
 pub mod content;
 pub mod cursor;
-pub mod hint;
 pub mod window;
 
 mod bell;
@@ -339,9 +336,6 @@ pub struct Display {
 
     pub size_info: SizeInfo,
 
-    /// Hint highlighted by the mouse.
-    pub highlighted_hint: Option<HintMatch>,
-
     pub is_wayland: bool,
 
     /// UI cursor visibility for blinking.
@@ -351,9 +345,6 @@ pub struct Display {
 
     /// Mapped RGB values for each terminal color.
     pub colors: List,
-
-    /// State of the keyboard hints.
-    pub hint_state: HintState,
 
     /// Unprocessed display updates.
     pub pending_update: DisplayUpdate,
@@ -366,9 +357,6 @@ pub struct Display {
 
     /// The state of the timer for frame scheduling.
     pub frame_timer: FrameTimer,
-
-    // Mouse point position when highlighting hints.
-    hint_mouse_point: Option<Point>,
 
     renderer: ManuallyDrop<Renderer>,
 
@@ -482,8 +470,6 @@ impl Display {
             _ => (),
         }
 
-        let hint_state = HintState::new(config.hints.alphabet());
-
         let debug_damage = config.debug.highlight_damage;
         let (damage_rects, next_frame_damage_rects) = if is_wayland || debug_damage {
             let vec = Vec::with_capacity(size_info.screen_lines());
@@ -503,11 +489,9 @@ impl Display {
             surface: ManuallyDrop::new(surface),
             renderer: ManuallyDrop::new(renderer),
             glyph_cache,
-            hint_state,
             meter: Meter::new(),
             size_info,
             ime: Ime::new(),
-            highlighted_hint: None,
             is_wayland,
             cursor_hidden: false,
             frame_timer: FrameTimer::new(),
@@ -518,7 +502,6 @@ impl Display {
             debug_damage,
             damage_rects,
             next_frame_damage_rects,
-            hint_mouse_point: None,
         })
     }
 
@@ -717,9 +700,8 @@ impl Display {
         selection_range: Option<SelectionRange>,
         search_state: &SearchState,
     ) {
-        let requires_full_damage = self.visual_bell.intensity() != 0.
-            || self.hint_state.active()
-            || search_state.regex().is_some();
+        let requires_full_damage =
+            self.visual_bell.intensity() != 0. || search_state.regex().is_some();
         if requires_full_damage {
             terminal.mark_fully_damaged();
         }
@@ -783,9 +765,6 @@ impl Display {
 
         self.renderer.clear(background_color, config.window_opacity());
         let mut lines = RenderLines::new();
-
-        // Optimize loop hint comparator.
-        let has_highlighted_hint = self.highlighted_hint.is_some();
 
         // Draw grid.
         {
@@ -929,11 +908,6 @@ impl Display {
 
         self.draw_render_timer(config);
 
-        // Draw hyperlink uri preview.
-        if has_highlighted_hint {
-            self.draw_hyperlink_preview(config, Some(cursor_point), display_offset);
-        }
-
         // Frame event should be requested before swapping buffers on Wayland, since it requires
         // surface `commit`, which is done by swap buffers under the hood.
         if self.is_wayland {
@@ -968,46 +942,6 @@ impl Display {
         self.debug_damage = config.debug.highlight_damage;
         self.visual_bell.update_config(&config.bell);
         self.colors = List::from(&config.colors);
-    }
-
-    /// Update the mouse/vi mode cursor hint highlighting.
-    ///
-    /// This will return whether the highlighted hints changed.
-    pub fn update_highlighted_hints<T>(&mut self, term: &Term<T>, mouse: &Mouse) -> bool {
-        let mut dirty = false;
-
-        // Abort if mouse highlighting conditions are not met.
-        if !mouse.inside_text_area || !term.selection.as_ref().map_or(true, Selection::is_empty) {
-            dirty |= self.highlighted_hint.is_some();
-            self.highlighted_hint = None;
-            return dirty;
-        }
-
-        // Find highlighted hint at mouse position.
-        let point = mouse.point(&self.size_info, term.grid().display_offset());
-        // TODO: remove
-        let highlighted_hint = None;
-
-        // Update cursor shape.
-        if highlighted_hint.is_some() {
-            // If mouse changed the line, we should update the hyperlink preview, since the
-            // highlighted hint could be disrupted by the old preview.
-            dirty = self.hint_mouse_point.map_or(false, |p| p.line != point.line);
-            self.hint_mouse_point = Some(point);
-            self.window.set_mouse_cursor(CursorIcon::Hand);
-        } else if self.highlighted_hint.is_some() {
-            self.hint_mouse_point = None;
-            if term.mode().intersects(TermMode::MOUSE_MODE) && !term.mode().contains(TermMode::VI) {
-                self.window.set_mouse_cursor(CursorIcon::Default);
-            } else {
-                self.window.set_mouse_cursor(CursorIcon::Text);
-            }
-        }
-
-        dirty |= self.highlighted_hint != highlighted_hint;
-        self.highlighted_hint = highlighted_hint;
-
-        dirty
     }
 
     #[inline(never)]
@@ -1121,71 +1055,6 @@ impl Display {
         bar_text.push(' ');
 
         bar_text
-    }
-
-    /// Draw preview for the currently highlighted `Hyperlink`.
-    #[inline(never)]
-    fn draw_hyperlink_preview(
-        &mut self,
-        config: &UiConfig,
-        cursor_point: Option<Point>,
-        display_offset: usize,
-    ) {
-        let num_cols = self.size_info.columns();
-        let uris: Vec<_> = self
-            .highlighted_hint
-            .iter()
-            .filter_map(|hint| hint.hyperlink().map(|hyperlink| hyperlink.uri()))
-            .map(|uri| StrShortener::new(uri, num_cols, ShortenDirection::Right, Some(SHORTENER)))
-            .collect();
-
-        if uris.is_empty() {
-            return;
-        }
-
-        // The maximum amount of protected lines including the ones we'll show preview on.
-        let max_protected_lines = uris.len() * 2;
-
-        // Lines we shouldn't show preview on, because it'll obscure the highlighted hint.
-        let mut protected_lines = Vec::with_capacity(max_protected_lines);
-        if self.size_info.screen_lines() > max_protected_lines {
-            // Prefer to show preview even when it'll likely obscure the highlighted hint, when
-            // there's no place left for it.
-            protected_lines.push(self.hint_mouse_point.map(|point| point.line));
-            protected_lines.push(cursor_point.map(|point| point.line));
-        }
-
-        // Find the line in viewport we can draw preview on without obscuring protected lines.
-        let viewport_bottom = self.size_info.bottommost_line() - Line(display_offset as i32);
-        let viewport_top = viewport_bottom - (self.size_info.screen_lines() - 1);
-        let uri_lines = (viewport_top.0..=viewport_bottom.0)
-            .rev()
-            .map(|line| Some(Line(line)))
-            .filter_map(|line| {
-                if protected_lines.contains(&line) {
-                    None
-                } else {
-                    protected_lines.push(line);
-                    line
-                }
-            })
-            .take(uris.len())
-            .flat_map(|line| term::point_to_viewport(display_offset, Point::new(line, Column(0))));
-
-        let fg = config.colors.footer_bar_foreground();
-        let bg = config.colors.footer_bar_background();
-        for (uri, point) in uris.into_iter().zip(uri_lines) {
-            // Damage the uri preview.
-            if self.collect_damage() {
-                let uri_preview_damage = self.damage_from_point(point, num_cols as u32);
-                self.damage_rects.push(uri_preview_damage);
-
-                // Damage the uri preview for the next frame as well.
-                self.next_frame_damage_rects.push(uri_preview_damage);
-            }
-
-            self.renderer.draw_string(point, fg, bg, uri, &self.size_info, &mut self.glyph_cache);
-        }
     }
 
     /// Draw current search regex.

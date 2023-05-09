@@ -86,6 +86,7 @@ size:
 	@exa -l /Applications/Alacritty.app/Contents/MacOS/alacritty
 
 run:
+	cargo build
 	./target/debug/alacritty
 
 .PHONY: app binary clean dmg install $(TARGET) $(TARGET)-universal khang

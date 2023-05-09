@@ -115,7 +115,7 @@ impl UiConfig {
                 mods: binding.mods.0,
                 mode: binding.mode.mode,
                 notmode: binding.mode.not_mode,
-                action: Action::Hint(hint.clone()),
+                action: Action::None,
             };
 
             self.key_bindings.0.push(binding);
@@ -250,13 +250,6 @@ impl Default for Hints {
             }],
             alphabet: Default::default(),
         }
-    }
-}
-
-impl Hints {
-    /// Characters for the hint labels.
-    pub fn alphabet(&self) -> &str {
-        &self.alphabet.0
     }
 }
 

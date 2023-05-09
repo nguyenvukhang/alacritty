@@ -95,11 +95,6 @@ impl Scheduler {
         self.timers.remove(index)
     }
 
-    /// Check if a timer is already scheduled.
-    pub fn scheduled(&mut self, id: TimerId) -> bool {
-        self.timers.iter().any(|timer| timer.id == id)
-    }
-
     /// Remove all timers scheduled for a window.
     ///
     /// This must be called when a window is removed to ensure that timers on intervals do not

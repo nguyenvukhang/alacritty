@@ -347,9 +347,6 @@ impl WindowContext {
         // Change opacity state.
         self.display.window.set_transparent(!opaque);
 
-        // Update hint keys.
-        self.display.hint_state.update_alphabet(self.config.hints.alphabet());
-
         // Update cursor blinking.
         let event = Event::new(TerminalEvent::CursorBlinkingChange.into(), None);
         self.event_queue.push(event.into());
@@ -480,10 +477,6 @@ impl WindowContext {
         }
 
         if self.dirty || self.mouse.hint_highlight_dirty {
-            self.dirty |= self.display.update_highlighted_hints(
-                &terminal,
-                &self.mouse,
-            );
             self.mouse.hint_highlight_dirty = false;
         }
 
