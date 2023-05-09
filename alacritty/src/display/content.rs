@@ -1,20 +1,16 @@
-use std::borrow::Cow;
-use std::ops::Deref;
-use std::{cmp, mem};
+use std::mem;
 
 use alacritty_terminal::ansi::{Color, CursorShape, NamedColor};
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Indexed;
-use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::index::Point;
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::term::color::{CellRgb, Rgb};
-use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{self, RenderableContent as TerminalContent, Term};
 
 use crate::config::UiConfig;
 use crate::display::color::{List, DIM_FACTOR};
-use crate::display::hint::HintState;
 use crate::display::Display;
 use crate::event::SearchState;
 
@@ -29,11 +25,8 @@ pub struct RenderableContent<'a> {
     cursor: RenderableCursor,
     cursor_shape: CursorShape,
     cursor_point: Point<usize>,
-    search: Option<HintMatches<'a>>,
-    hint: Option<Hint<'a>>,
     config: &'a UiConfig,
     colors: &'a List,
-    focused_match: Option<&'a Match>,
 }
 
 impl<'a> RenderableContent<'a> {
@@ -43,9 +36,6 @@ impl<'a> RenderableContent<'a> {
         term: &'a Term<T>,
         search_state: &'a SearchState,
     ) -> Self {
-        // TODO: remove
-        let search = None;
-        let focused_match = search_state.focused_match();
         let terminal_content = term.renderable_content();
 
         // Find terminal cursor shape.
@@ -66,23 +56,13 @@ impl<'a> RenderableContent<'a> {
         let display_offset = terminal_content.display_offset;
         let cursor_point = term::point_to_viewport(display_offset, cursor_point).unwrap();
 
-        let hint = if display.hint_state.active() {
-            display.hint_state.update_matches();
-            Some(Hint::from(&display.hint_state))
-        } else {
-            None
-        };
-
         Self {
             colors: &display.colors,
             cursor: RenderableCursor::new_hidden(),
             terminal_content,
-            focused_match,
             cursor_shape,
             cursor_point,
-            search,
             config,
-            hint,
         }
     }
 
@@ -217,22 +197,10 @@ impl RenderableCell {
         });
 
         let display_offset = content.terminal_content.display_offset;
-        let viewport_start = Point::new(Line(-(display_offset as i32)), Column(0));
         let colors = &content.config.colors;
-        let mut character = cell.c;
+        let character = cell.c;
 
-        if let Some((c, is_first)) =
-            content.hint.as_mut().and_then(|hint| hint.advance(viewport_start, cell.point))
-        {
-            let (config_fg, config_bg) = if is_first {
-                (colors.hints.start.foreground, colors.hints.start.background)
-            } else {
-                (colors.hints.end.foreground, colors.hints.end.background)
-            };
-            Self::compute_cell_rgb(&mut fg, &mut bg, &mut bg_alpha, config_fg, config_bg);
-
-            character = c;
-        } else if is_selected {
+        if is_selected {
             let config_fg = colors.selection.foreground;
             let config_bg = colors.selection.background;
             Self::compute_cell_rgb(&mut fg, &mut bg, &mut bg_alpha, config_fg, config_bg);
@@ -243,14 +211,6 @@ impl RenderableCell {
                 bg = content.color(NamedColor::Foreground as usize);
                 bg_alpha = 1.0;
             }
-        } else if content.search.as_mut().map_or(false, |search| search.advance(cell.point)) {
-            let focused = content.focused_match.map_or(false, |fm| fm.contains(&cell.point));
-            let (config_fg, config_bg) = if focused {
-                (colors.search.focused_match.foreground, colors.search.focused_match.background)
-            } else {
-                (colors.search.matches.foreground, colors.search.matches.background)
-            };
-            Self::compute_cell_rgb(&mut fg, &mut bg, &mut bg_alpha, config_fg, config_bg);
         }
 
         // Convert cell point to viewport position.
@@ -410,91 +370,5 @@ impl RenderableCursor {
 
     pub fn point(&self) -> Point<usize> {
         self.point
-    }
-}
-
-/// Regex hints for keyboard shortcuts.
-struct Hint<'a> {
-    /// Hint matches and position.
-    matches: HintMatches<'a>,
-
-    /// Last match checked against current cell position.
-    labels: &'a Vec<Vec<char>>,
-}
-
-impl<'a> Hint<'a> {
-    /// Advance the hint iterator.
-    ///
-    /// If the point is within a hint, the keyboard shortcut character that should be displayed at
-    /// this position will be returned.
-    ///
-    /// The tuple's [`bool`] will be `true` when the character is the first for this hint.
-    fn advance(&mut self, viewport_start: Point, point: Point) -> Option<(char, bool)> {
-        // Check if we're within a match at all.
-        if !self.matches.advance(point) {
-            return None;
-        }
-
-        // Match starting position on this line; linebreaks interrupt the hint labels.
-        let start = self
-            .matches
-            .get(self.matches.index)
-            .map(|bounds| cmp::max(*bounds.start(), viewport_start))
-            .filter(|start| start.line == point.line)?;
-
-        // Position within the hint label.
-        let label_position = point.column.0 - start.column.0;
-        let is_first = label_position == 0;
-
-        // Hint label character.
-        self.labels[self.matches.index].get(label_position).copied().map(|c| (c, is_first))
-    }
-}
-
-impl<'a> From<&'a HintState> for Hint<'a> {
-    fn from(hint_state: &'a HintState) -> Self {
-        let matches = HintMatches::new(hint_state.matches());
-        Self { labels: hint_state.labels(), matches }
-    }
-}
-
-/// Visible hint match tracking.
-#[derive(Default)]
-struct HintMatches<'a> {
-    /// All visible matches.
-    matches: Cow<'a, [Match]>,
-
-    /// Index of the last match checked.
-    index: usize,
-}
-
-impl<'a> HintMatches<'a> {
-    /// Create new renderable matches iterator..
-    fn new(matches: impl Into<Cow<'a, [Match]>>) -> Self {
-        Self { matches: matches.into(), index: 0 }
-    }
-
-    /// Advance the regex tracker to the next point.
-    ///
-    /// This will return `true` if the point passed is part of a regex match.
-    fn advance(&mut self, point: Point) -> bool {
-        while let Some(bounds) = self.get(self.index) {
-            if bounds.start() > &point {
-                break;
-            } else if bounds.end() < &point {
-                self.index += 1;
-            } else {
-                return true;
-            }
-        }
-        false
-    }
-}
-
-impl<'a> Deref for HintMatches<'a> {
-    type Target = [Match];
-
-    fn deref(&self) -> &Self::Target {
-        self.matches.deref()
     }
 }

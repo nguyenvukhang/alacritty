@@ -21,7 +21,6 @@ use crate::term::color::{Colors, Rgb};
 
 pub mod cell;
 pub mod color;
-pub mod search;
 
 /// Minimum number of columns.
 ///

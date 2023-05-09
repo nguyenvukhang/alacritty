@@ -36,9 +36,8 @@ use alacritty_terminal::config::LOG_TARGET_CONFIG;
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
 use alacritty_terminal::event_loop::Notifier;
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
+use alacritty_terminal::index::{Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 
 #[cfg(unix)]
@@ -129,9 +128,6 @@ pub struct SearchState {
     /// Search origin in viewport coordinates relative to original display offset.
     origin: Point,
 
-    /// Focused match during active search.
-    focused_match: Option<Match>,
-
     /// Search regex and history.
     ///
     /// During an active search, the first element is the user's current input.
@@ -152,11 +148,6 @@ impl SearchState {
         self.direction
     }
 
-    /// Focused match during vi-less search.
-    pub fn focused_match(&self) -> Option<&Match> {
-        self.focused_match.as_ref()
-    }
-
     /// Search regex text if a search is active.
     fn regex_mut(&mut self) -> Option<&mut String> {
         self.history_index.and_then(move |index| self.history.get_mut(index))
@@ -168,7 +159,6 @@ impl Default for SearchState {
         Self {
             direction: Direction::Right,
             display_offset_delta: Default::default(),
-            focused_match: Default::default(),
             history_index: Default::default(),
             history: Default::default(),
             origin: Default::default(),
@@ -458,7 +448,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
         self.search_state.history_index = Some(0);
         self.search_state.direction = direction;
-        self.search_state.focused_match = None;
 
         // Store original search position as origin and reset location.
         if self.terminal.mode().contains(TermMode::VI) {
@@ -506,13 +495,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         if self.terminal.mode().contains(TermMode::VI) {
             // Recover pre-search state in vi mode.
             self.search_reset_state();
-        } else if let Some(focused_match) = &self.search_state.focused_match {
-            // Create a selection for the focused match.
-            let start = *focused_match.start();
-            let end = *focused_match.end();
-            self.start_selection(SelectionType::Simple, start, Side::Left);
-            self.update_selection(end, Side::Right);
-            self.copy_selection(ClipboardType::Selection);
         }
 
         self.exit_search();
@@ -586,47 +568,10 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     #[inline]
     fn advance_search_origin(&mut self, direction: Direction) {
-        // Use focused match as new search origin if available.
-        if let Some(focused_match) = &self.search_state.focused_match {
-            let new_origin = match direction {
-                Direction::Right => focused_match.end().add(self.terminal, Boundary::None, 1),
-                Direction::Left => focused_match.start().sub(self.terminal, Boundary::None, 1),
-            };
-
-            self.terminal.scroll_to_point(new_origin);
-
-            self.search_state.display_offset_delta = 0;
-            self.search_state.origin = new_origin;
-        }
-
         // Search for the next match using the supplied direction.
         let search_direction = mem::replace(&mut self.search_state.direction, direction);
         self.goto_match(None);
         self.search_state.direction = search_direction;
-
-        // If we found a match, we set the search origin right in front of it to make sure that
-        // after modifications to the regex the search is started without moving the focused match
-        // around.
-        let focused_match = match &self.search_state.focused_match {
-            Some(focused_match) => focused_match,
-            None => return,
-        };
-
-        // Set new origin to the left/right of the match, depending on search direction.
-        let new_origin = match self.search_state.direction {
-            Direction::Right => *focused_match.start(),
-            Direction::Left => *focused_match.end(),
-        };
-
-        // Store the search origin with display offset by checking how far we need to scroll to it.
-        let old_display_offset = self.terminal.grid().display_offset() as i32;
-        self.terminal.scroll_to_point(new_origin);
-        let new_display_offset = self.terminal.grid().display_offset() as i32;
-        self.search_state.display_offset_delta = new_display_offset - old_display_offset;
-
-        // Store origin and scroll back to the match.
-        self.terminal.scroll_display(Scroll::Delta(-self.search_state.display_offset_delta));
-        self.search_state.origin = new_origin;
     }
 
     #[inline]
@@ -668,7 +613,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     /// Process a new character for keyboard hints.
     fn hint_input(&mut self, c: char) {
-        if let Some(hint) = self.display.hint_state.keyboard_input(self.terminal, c) {
+        if let Some(hint) = self.display.hint_state.keyboard_input(c) {
             self.mouse.block_hint_launcher = false;
             self.trigger_hint(&hint);
         }
@@ -681,10 +626,9 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             return;
         }
 
-        let hint_bounds = hint.bounds();
         let text = match hint.hyperlink() {
             Some(hyperlink) => hyperlink.uri().to_owned(),
-            None => self.terminal.bounds_to_string(*hint_bounds.start(), *hint_bounds.end()),
+            None => "".to_string(), // TODO: remove?
         };
 
         match &hint.action() {
@@ -704,8 +648,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             },
             // Select the text.
             HintAction::Action(HintInternalAction::Select) => {
-                self.start_selection(SelectionType::Simple, *hint_bounds.start(), Side::Left);
-                self.update_selection(*hint_bounds.end(), Side::Right);
                 self.copy_selection(ClipboardType::Selection);
             },
         }
@@ -821,9 +763,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         let timer_id = TimerId::new(Topic::DelayedSearch, self.display.window.id());
         self.scheduler.unschedule(timer_id);
 
-        // Clear focused match.
-        self.search_state.focused_match = None;
-
         // The viewport reset logic is only needed for vi mode, since without it our origin is
         // always at the current display offset instead of at the vi cursor position which we need
         // to recover to.
@@ -847,9 +786,6 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
     fn exit_search(&mut self) {
         self.display.pending_update.dirty = true;
         self.search_state.history_index = None;
-
-        // Clear focused match.
-        self.search_state.focused_match = None;
     }
 
     /// Update the cursor blinking state.

@@ -724,7 +724,6 @@ impl Display {
             terminal.mark_fully_damaged();
         }
 
-        self.damage_highlighted_hints(terminal);
         match terminal.damage(selection_range) {
             TermDamage::Full => self.fully_damage(),
             TermDamage::Partial(damaged_lines) => {
@@ -740,9 +739,6 @@ impl Display {
         if requires_full_damage {
             terminal.mark_fully_damaged();
         }
-
-        // Damage highlighted hints for the next frame as well, so we'll clear them.
-        self.damage_highlighted_hints(terminal);
     }
 
     /// Draw the screen.
@@ -800,26 +796,11 @@ impl Display {
             self.renderer.set_viewport(&size_info);
 
             let glyph_cache = &mut self.glyph_cache;
-            let highlighted_hint = &self.highlighted_hint;
 
             self.renderer.draw_cells(
                 &size_info,
                 glyph_cache,
-                grid_cells.into_iter().map(|mut cell| {
-                    // Underline hints hovered by mouse or vi mode cursor.
-                    let point = term::viewport_to_point(display_offset, cell.point);
-
-                    if has_highlighted_hint {
-                        let hyperlink =
-                            cell.extra.as_ref().and_then(|extra| extra.hyperlink.as_ref());
-                        if highlighted_hint
-                            .as_ref()
-                            .map_or(false, |hint| hint.should_highlight(point, hyperlink))
-                        {
-                            cell.flags.insert(Flags::UNDERLINE);
-                        }
-                    }
-
+                grid_cells.into_iter().map(|cell| {
                     // Update underline/strikeout.
                     lines.update(&cell);
 
@@ -1308,23 +1289,6 @@ impl Display {
         let y = y_top - (point.line as u32 + 1) * size_info.cell_height();
         let width = len * size_info.cell_width();
         DamageRect::new(x as i32, y as i32, width as i32, size_info.cell_height() as i32)
-    }
-
-    /// Damage currently highlighted `Display` hints.
-    #[inline]
-    fn damage_highlighted_hints<T: EventListener>(&self, terminal: &mut Term<T>) {
-        let display_offset = terminal.grid().display_offset();
-        let last_visible_line = terminal.screen_lines() - 1;
-        for hint in self.highlighted_hint.iter() {
-            for point in
-                (hint.bounds().start().line.0..=hint.bounds().end().line.0).flat_map(|line| {
-                    term::point_to_viewport(display_offset, Point::new(Line(line), Column(0)))
-                        .filter(|point| point.line <= last_visible_line)
-                })
-            {
-                terminal.damage_line(point.line, 0, terminal.columns() - 1);
-            }
-        }
     }
 
     /// Returns `true` if damage information should be collected, `false` otherwise.

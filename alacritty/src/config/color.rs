@@ -123,7 +123,6 @@ impl Default for InvertedCellColors {
 
 #[derive(ConfigDeserialize, Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct SearchColors {
-    pub focused_match: FocusedMatchColors,
     pub matches: MatchColors,
     #[config(deprecated = "use `colors.footer_bar` instead")]
     bar: BarColors,

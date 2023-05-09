@@ -962,17 +962,8 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     /// Icon state of the cursor.
     fn cursor_state(&mut self) -> CursorIcon {
-        let display_offset = self.ctx.terminal().grid().display_offset();
-        let point = self.ctx.mouse().point(&self.ctx.size_info(), display_offset);
-        let hyperlink = self.ctx.terminal().grid()[point].hyperlink();
-
-        // Function to check if mouse is on top of a hint.
-        let hint_highlighted = |hint: &HintMatch| hint.should_highlight(point, hyperlink.as_ref());
-
         if let Some(mouse_state) = self.message_bar_cursor_state() {
             mouse_state
-        } else if self.ctx.display().highlighted_hint.as_ref().map_or(false, hint_highlighted) {
-            CursorIcon::Hand
         } else if !self.ctx.modifiers().shift() && self.ctx.mouse_mode() {
             CursorIcon::Default
         } else {
