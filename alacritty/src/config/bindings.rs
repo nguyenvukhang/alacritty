@@ -206,31 +206,6 @@ impl Display for Action {
     }
 }
 
-/// Vi mode specific actions.
-#[derive(ConfigDeserialize, Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ViAction {
-    /// Toggle normal vi selection.
-    ToggleNormalSelection,
-    /// Toggle line vi selection.
-    ToggleLineSelection,
-    /// Toggle block vi selection.
-    ToggleBlockSelection,
-    /// Toggle semantic vi selection.
-    ToggleSemanticSelection,
-    /// Jump to the beginning of the next match.
-    SearchNext,
-    /// Jump to the beginning of the previous match.
-    SearchPrevious,
-    /// Jump to the next start of a match to the left of the origin.
-    SearchStart,
-    /// Jump to the next end of a match to the right of the origin.
-    SearchEnd,
-    /// Launch the URL below the vi mode cursor.
-    Open,
-    /// Centers the screen around the vi mode cursor.
-    CenterAroundViCursor,
-}
-
 /// Mouse binding specific actions.
 #[derive(ConfigDeserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MouseAction {
@@ -300,7 +275,7 @@ pub fn default_mouse_bindings() -> Vec<MouseBinding> {
         MouseBinding;
         MouseButton::Right;                         MouseAction::ExpandSelection;
         MouseButton::Right,   ModifiersState::CTRL; MouseAction::ExpandSelection;
-        MouseButton::Middle, ~BindingMode::VI; Action::PasteSelection;
+        MouseButton::Middle; Action::PasteSelection;
     )
 }
 
@@ -308,104 +283,74 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
     let mut bindings = bindings!(
         KeyBinding;
         Copy;  Action::Copy;
-        Copy,  +BindingMode::VI; Action::ClearSelection;
-        Paste, ~BindingMode::VI; Action::Paste;
+        Paste; Action::Paste;
         L, ModifiersState::CTRL; Action::ClearLogNotice;
-        L,    ModifiersState::CTRL,  ~BindingMode::VI, ~BindingMode::SEARCH;
+        L,    ModifiersState::CTRL;
             Action::Esc("\x0c".into());
-        Tab,  ModifiersState::SHIFT, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Tab,  ModifiersState::SHIFT;
             Action::Esc("\x1b[Z".into());
-        Back, ModifiersState::ALT,   ~BindingMode::VI, ~BindingMode::SEARCH;
+        Back, ModifiersState::ALT;
             Action::Esc("\x1b\x7f".into());
-        Back, ModifiersState::SHIFT, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Back, ModifiersState::SHIFT;
             Action::Esc("\x7f".into());
         Home,     ModifiersState::SHIFT, ~BindingMode::ALT_SCREEN; Action::ScrollToTop;
         End,      ModifiersState::SHIFT, ~BindingMode::ALT_SCREEN; Action::ScrollToBottom;
         PageUp,   ModifiersState::SHIFT, ~BindingMode::ALT_SCREEN; Action::ScrollPageUp;
         PageDown, ModifiersState::SHIFT, ~BindingMode::ALT_SCREEN; Action::ScrollPageDown;
-        Home,     ModifiersState::SHIFT, +BindingMode::ALT_SCREEN,
-            ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[1;2H".into());
-        End,      ModifiersState::SHIFT, +BindingMode::ALT_SCREEN,
-            ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[1;2F".into());
-        PageUp,   ModifiersState::SHIFT, +BindingMode::ALT_SCREEN,
-            ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[5;2~".into());
-        PageDown, ModifiersState::SHIFT, +BindingMode::ALT_SCREEN,
-            ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[6;2~".into());
-        Home,  +BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Home,     ModifiersState::SHIFT, +BindingMode::ALT_SCREEN; Action::Esc("\x1b[1;2H".into());
+        End,      ModifiersState::SHIFT, +BindingMode::ALT_SCREEN; Action::Esc("\x1b[1;2F".into());
+        PageUp,   ModifiersState::SHIFT, +BindingMode::ALT_SCREEN; Action::Esc("\x1b[5;2~".into());
+        PageDown, ModifiersState::SHIFT, +BindingMode::ALT_SCREEN; Action::Esc("\x1b[6;2~".into());
+        Home,  +BindingMode::APP_CURSOR;
             Action::Esc("\x1bOH".into());
-        Home,  ~BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Home,  ~BindingMode::APP_CURSOR;
             Action::Esc("\x1b[H".into());
-        End,   +BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        End,   +BindingMode::APP_CURSOR;
             Action::Esc("\x1bOF".into());
-        End,   ~BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        End,   ~BindingMode::APP_CURSOR;
             Action::Esc("\x1b[F".into());
-        Up,    +BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Up,    +BindingMode::APP_CURSOR;
             Action::Esc("\x1bOA".into());
-        Up,    ~BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Up,    ~BindingMode::APP_CURSOR;
             Action::Esc("\x1b[A".into());
-        Down,  +BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Down,  +BindingMode::APP_CURSOR;
             Action::Esc("\x1bOB".into());
-        Down,  ~BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Down,  ~BindingMode::APP_CURSOR;
             Action::Esc("\x1b[B".into());
-        Right, +BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Right, +BindingMode::APP_CURSOR;
             Action::Esc("\x1bOC".into());
-        Right, ~BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Right, ~BindingMode::APP_CURSOR;
             Action::Esc("\x1b[C".into());
-        Left,  +BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Left,  +BindingMode::APP_CURSOR;
             Action::Esc("\x1bOD".into());
-        Left,  ~BindingMode::APP_CURSOR, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Left,  ~BindingMode::APP_CURSOR;
             Action::Esc("\x1b[D".into());
-        Back,        ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x7f".into());
-        Insert,      ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[2~".into());
-        Delete,      ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[3~".into());
-        PageUp,      ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[5~".into());
-        PageDown,    ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[6~".into());
-        F1,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1bOP".into());
-        F2,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1bOQ".into());
-        F3,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1bOR".into());
-        F4,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1bOS".into());
-        F5,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[15~".into());
-        F6,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[17~".into());
-        F7,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[18~".into());
-        F8,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[19~".into());
-        F9,          ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[20~".into());
-        F10,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[21~".into());
-        F11,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[23~".into());
-        F12,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[24~".into());
-        F13,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[25~".into());
-        F14,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[26~".into());
-        F15,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[28~".into());
-        F16,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[29~".into());
-        F17,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[31~".into());
-        F18,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[32~".into());
-        F19,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[33~".into());
-        F20,         ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\x1b[34~".into());
-        NumpadEnter, ~BindingMode::VI, ~BindingMode::SEARCH; Action::Esc("\n".into());
-        Space, ModifiersState::SHIFT | ModifiersState::CTRL, +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollToBottom;
-        Escape,                        +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ClearSelection;
-        I,                             +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollToBottom;
-        Y,      ModifiersState::CTRL,  +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollLineUp;
-        E,      ModifiersState::CTRL,  +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollLineDown;
-        G,                             +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollToTop;
-        G,      ModifiersState::SHIFT, +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollToBottom;
-        B,      ModifiersState::CTRL,  +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollPageUp;
-        F,      ModifiersState::CTRL,  +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollPageDown;
-        U,      ModifiersState::CTRL,  +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollHalfPageUp;
-        D,      ModifiersState::CTRL,  +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ScrollHalfPageDown;
-        Y,                             +BindingMode::VI, ~BindingMode::SEARCH; Action::Copy;
-        Y,                             +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::ClearSelection;
+        Back; Action::Esc("\x7f".into());
+        Insert; Action::Esc("\x1b[2~".into());
+        Delete; Action::Esc("\x1b[3~".into());
+        PageUp; Action::Esc("\x1b[5~".into());
+        PageDown; Action::Esc("\x1b[6~".into());
+        F1; Action::Esc("\x1bOP".into());
+        F2; Action::Esc("\x1bOQ".into());
+        F3; Action::Esc("\x1bOR".into());
+        F4; Action::Esc("\x1bOS".into());
+        F5; Action::Esc("\x1b[15~".into());
+        F6; Action::Esc("\x1b[17~".into());
+        F7; Action::Esc("\x1b[18~".into());
+        F8; Action::Esc("\x1b[19~".into());
+        F9; Action::Esc("\x1b[20~".into());
+        F10; Action::Esc("\x1b[21~".into());
+        F11; Action::Esc("\x1b[23~".into());
+        F12; Action::Esc("\x1b[24~".into());
+        F13; Action::Esc("\x1b[25~".into());
+        F14; Action::Esc("\x1b[26~".into());
+        F15; Action::Esc("\x1b[28~".into());
+        F16; Action::Esc("\x1b[29~".into());
+        F17; Action::Esc("\x1b[31~".into());
+        F18; Action::Esc("\x1b[32~".into());
+        F19; Action::Esc("\x1b[33~".into());
+        F20; Action::Esc("\x1b[34~".into());
+        NumpadEnter; Action::Esc("\n".into());
     );
 
     //   Code     Modifiers
@@ -434,55 +379,55 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
         let modifiers_code = index + 2;
         bindings.extend(bindings!(
             KeyBinding;
-            Delete, mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            Delete, mods;
                 Action::Esc(format!("\x1b[3;{}~", modifiers_code));
-            Up,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            Up,     mods;
                 Action::Esc(format!("\x1b[1;{}A", modifiers_code));
-            Down,   mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            Down,   mods;
                 Action::Esc(format!("\x1b[1;{}B", modifiers_code));
-            Right,  mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            Right,  mods;
                 Action::Esc(format!("\x1b[1;{}C", modifiers_code));
-            Left,   mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            Left,   mods;
                 Action::Esc(format!("\x1b[1;{}D", modifiers_code));
-            F1,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F1,     mods;
                 Action::Esc(format!("\x1b[1;{}P", modifiers_code));
-            F2,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F2,     mods;
                 Action::Esc(format!("\x1b[1;{}Q", modifiers_code));
-            F3,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F3,     mods;
                 Action::Esc(format!("\x1b[1;{}R", modifiers_code));
-            F4,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F4,     mods;
                 Action::Esc(format!("\x1b[1;{}S", modifiers_code));
-            F5,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F5,     mods;
                 Action::Esc(format!("\x1b[15;{}~", modifiers_code));
-            F6,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F6,     mods;
                 Action::Esc(format!("\x1b[17;{}~", modifiers_code));
-            F7,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F7,     mods;
                 Action::Esc(format!("\x1b[18;{}~", modifiers_code));
-            F8,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F8,     mods;
                 Action::Esc(format!("\x1b[19;{}~", modifiers_code));
-            F9,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F9,     mods;
                 Action::Esc(format!("\x1b[20;{}~", modifiers_code));
-            F10,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F10,    mods;
                 Action::Esc(format!("\x1b[21;{}~", modifiers_code));
-            F11,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F11,    mods;
                 Action::Esc(format!("\x1b[23;{}~", modifiers_code));
-            F12,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F12,    mods;
                 Action::Esc(format!("\x1b[24;{}~", modifiers_code));
-            F13,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F13,    mods;
                 Action::Esc(format!("\x1b[25;{}~", modifiers_code));
-            F14,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F14,    mods;
                 Action::Esc(format!("\x1b[26;{}~", modifiers_code));
-            F15,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F15,    mods;
                 Action::Esc(format!("\x1b[28;{}~", modifiers_code));
-            F16,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F16,    mods;
                 Action::Esc(format!("\x1b[29;{}~", modifiers_code));
-            F17,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F17,    mods;
                 Action::Esc(format!("\x1b[31;{}~", modifiers_code));
-            F18,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F18,    mods;
                 Action::Esc(format!("\x1b[32;{}~", modifiers_code));
-            F19,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F19,    mods;
                 Action::Esc(format!("\x1b[33;{}~", modifiers_code));
-            F20,    mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+            F20,    mods;
                 Action::Esc(format!("\x1b[34;{}~", modifiers_code));
         ));
 
@@ -490,15 +435,15 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
         if modifiers_code != 2 {
             bindings.extend(bindings!(
                 KeyBinding;
-                Insert,   mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+                Insert,   mods;
                     Action::Esc(format!("\x1b[2;{}~", modifiers_code));
-                PageUp,   mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+                PageUp,   mods;
                     Action::Esc(format!("\x1b[5;{}~", modifiers_code));
-                PageDown, mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+                PageDown, mods;
                     Action::Esc(format!("\x1b[6;{}~", modifiers_code));
-                End,      mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+                End,      mods;
                     Action::Esc(format!("\x1b[1;{}F", modifiers_code));
-                Home,     mods, ~BindingMode::VI, ~BindingMode::SEARCH;
+                Home,     mods;
                     Action::Esc(format!("\x1b[1;{}H", modifiers_code));
             ));
         }
@@ -513,11 +458,10 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
 fn common_keybindings() -> Vec<KeyBinding> {
     bindings!(
         KeyBinding;
-        V,        ModifiersState::CTRL | ModifiersState::SHIFT, ~BindingMode::VI; Action::Paste;
+        V,        ModifiersState::CTRL | ModifiersState::SHIFT; Action::Paste;
         C,        ModifiersState::CTRL | ModifiersState::SHIFT; Action::Copy;
-        C,        ModifiersState::CTRL | ModifiersState::SHIFT,
-            +BindingMode::VI, ~BindingMode::SEARCH; Action::ClearSelection;
-        Insert,   ModifiersState::SHIFT, ~BindingMode::VI; Action::PasteSelection;
+        C,        ModifiersState::CTRL | ModifiersState::SHIFT; Action::ClearSelection;
+        Insert,   ModifiersState::SHIFT; Action::PasteSelection;
         Key0,     ModifiersState::CTRL;  Action::ResetFontSize;
         Equals,   ModifiersState::CTRL;  Action::IncreaseFontSize;
         Plus,     ModifiersState::CTRL;  Action::IncreaseFontSize;
@@ -552,16 +496,16 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         NumpadAdd,      ModifiersState::LOGO; Action::IncreaseFontSize;
         Minus,          ModifiersState::LOGO; Action::DecreaseFontSize;
         NumpadSubtract, ModifiersState::LOGO; Action::DecreaseFontSize;
-        Insert, ModifiersState::SHIFT, ~BindingMode::VI, ~BindingMode::SEARCH;
+        Insert, ModifiersState::SHIFT;
             Action::Esc("\x1b[2;2~".into());
-        K, ModifiersState::LOGO, ~BindingMode::VI, ~BindingMode::SEARCH;
+        K, ModifiersState::LOGO;
             Action::Esc("\x0c".into());
-        K, ModifiersState::LOGO, ~BindingMode::VI, ~BindingMode::SEARCH;  Action::ClearHistory;
-        V, ModifiersState::LOGO, ~BindingMode::VI; Action::Paste;
+        K, ModifiersState::LOGO;  Action::ClearHistory;
+        V, ModifiersState::LOGO; Action::Paste;
         N, ModifiersState::LOGO; Action::CreateNewWindow;
         F, ModifiersState::CTRL | ModifiersState::LOGO; Action::ToggleFullscreen;
         C, ModifiersState::LOGO; Action::Copy;
-        C, ModifiersState::LOGO, +BindingMode::VI, ~BindingMode::SEARCH; Action::ClearSelection;
+        C, ModifiersState::LOGO; Action::ClearSelection;
         H, ModifiersState::LOGO; Action::Hide;
         H, ModifiersState::LOGO | ModifiersState::ALT; Action::HideOtherApplications;
         M, ModifiersState::LOGO; Action::Minimize;
@@ -610,19 +554,15 @@ bitflags! {
         const APP_CURSOR          = 0b0000_0001;
         const APP_KEYPAD          = 0b0000_0010;
         const ALT_SCREEN          = 0b0000_0100;
-        const VI                  = 0b0000_1000;
-        const SEARCH              = 0b0001_0000;
     }
 }
 
 impl BindingMode {
-    pub fn new(mode: &TermMode, search: bool) -> BindingMode {
+    pub fn new(mode: &TermMode) -> BindingMode {
         let mut binding_mode = BindingMode::empty();
         binding_mode.set(BindingMode::APP_CURSOR, mode.contains(TermMode::APP_CURSOR));
         binding_mode.set(BindingMode::APP_KEYPAD, mode.contains(TermMode::APP_KEYPAD));
         binding_mode.set(BindingMode::ALT_SCREEN, mode.contains(TermMode::ALT_SCREEN));
-        binding_mode.set(BindingMode::VI, mode.contains(TermMode::VI));
-        binding_mode.set(BindingMode::SEARCH, search);
         binding_mode
     }
 }
@@ -664,10 +604,6 @@ impl<'a> Deserialize<'a> for ModeWrapper {
                         "~appkeypad" => res.not_mode |= BindingMode::APP_KEYPAD,
                         "alt" => res.mode |= BindingMode::ALT_SCREEN,
                         "~alt" => res.not_mode |= BindingMode::ALT_SCREEN,
-                        "vi" => res.mode |= BindingMode::VI,
-                        "~vi" => res.not_mode |= BindingMode::VI,
-                        "search" => res.mode |= BindingMode::SEARCH,
-                        "~search" => res.not_mode |= BindingMode::SEARCH,
                         _ => return Err(E::invalid_value(Unexpected::Str(modifier), &self)),
                     }
                 }
@@ -1181,28 +1117,13 @@ mod tests {
 
     #[test]
     fn binding_matches_notmodes() {
-        let subset_notmodes = MockBinding {
-            notmode: BindingMode::VI | BindingMode::APP_CURSOR,
-            ..MockBinding::default()
-        };
+        let subset_notmodes =
+            MockBinding { notmode: BindingMode::APP_CURSOR, ..MockBinding::default() };
         let superset_notmodes =
             MockBinding { notmode: BindingMode::APP_CURSOR, ..MockBinding::default() };
 
         assert!(subset_notmodes.triggers_match(&superset_notmodes));
         assert!(superset_notmodes.triggers_match(&subset_notmodes));
-    }
-
-    #[test]
-    fn binding_matches_mode_notmode() {
-        let b1 = MockBinding {
-            mode: BindingMode::VI,
-            notmode: BindingMode::APP_CURSOR,
-            ..MockBinding::default()
-        };
-        let b2 = MockBinding { notmode: BindingMode::APP_CURSOR, ..MockBinding::default() };
-
-        assert!(b1.triggers_match(&b2));
-        assert!(b2.triggers_match(&b1));
     }
 
     #[test]
@@ -1232,29 +1153,5 @@ mod tests {
         assert!(binding.is_triggered_by(mode, binding.mods, &t));
         assert!(!binding.is_triggered_by(mode, superset_mods, &t));
         assert!(!binding.is_triggered_by(mode, subset_mods, &t));
-    }
-
-    #[test]
-    fn binding_trigger_modes() {
-        let binding = MockBinding { mode: BindingMode::ALT_SCREEN, ..MockBinding::default() };
-
-        let t = binding.trigger;
-        let mods = binding.mods;
-
-        assert!(!binding.is_triggered_by(BindingMode::VI, mods, &t));
-        assert!(binding.is_triggered_by(BindingMode::ALT_SCREEN, mods, &t));
-        assert!(binding.is_triggered_by(BindingMode::ALT_SCREEN | BindingMode::VI, mods, &t));
-    }
-
-    #[test]
-    fn binding_trigger_notmodes() {
-        let binding = MockBinding { notmode: BindingMode::ALT_SCREEN, ..MockBinding::default() };
-
-        let t = binding.trigger;
-        let mods = binding.mods;
-
-        assert!(binding.is_triggered_by(BindingMode::VI, mods, &t));
-        assert!(!binding.is_triggered_by(BindingMode::ALT_SCREEN, mods, &t));
-        assert!(!binding.is_triggered_by(BindingMode::ALT_SCREEN | BindingMode::VI, mods, &t));
     }
 }

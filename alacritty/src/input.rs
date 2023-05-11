@@ -813,7 +813,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     /// The provided mode, mods, and key must match what is allowed by a binding
     /// for its action to be executed.
     fn process_key_bindings(&mut self, input: KeyboardInput) {
-        let mode = BindingMode::new(self.ctx.terminal().mode(), false);
+        let mode = BindingMode::new(self.ctx.terminal().mode());
         let mods = *self.ctx.modifiers();
         let mut suppress_chars = None;
 
@@ -844,7 +844,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     /// The provided mode, mods, and key must match what is allowed by a binding
     /// for its action to be executed.
     fn process_mouse_bindings(&mut self, button: MouseButton) {
-        let mode = BindingMode::new(self.ctx.terminal().mode(), false);
+        let mode = BindingMode::new(self.ctx.terminal().mode());
         let mouse_mode = self.ctx.mouse_mode();
         let mods = *self.ctx.modifiers();
 
