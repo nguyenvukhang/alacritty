@@ -25,17 +25,15 @@ use winit::window::CursorIcon;
 use alacritty_terminal::ansi::{ClearMode, Handler};
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Direction, Point, Side};
+use alacritty_terminal::index::{Column, Point, Side};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::{ClipboardType, Term, TermMode};
 
 use crate::clipboard::Clipboard;
-use crate::config::{Action, BindingMode, Key, MouseAction, SearchAction, UiConfig};
+use crate::config::{Action, BindingMode, Key, MouseAction, UiConfig};
 use crate::display::window::Window;
 use crate::display::{Display, SizeInfo};
-use crate::event::{
-    ClickState, Event, EventType, Mouse, TouchPurpose, TouchZoom, TYPING_SEARCH_DELAY,
-};
+use crate::event::{ClickState, Event, EventType, Mouse, TouchPurpose, TouchZoom};
 use crate::message_bar::{self, Message};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 
@@ -98,16 +96,6 @@ pub trait ActionContext<T: EventListener> {
     fn mouse_mode(&self) -> bool;
     fn clipboard_mut(&mut self) -> &mut Clipboard;
     fn scheduler_mut(&mut self) -> &mut Scheduler;
-    fn start_search(&mut self, _direction: Direction) {}
-    fn confirm_search(&mut self) {}
-    fn cancel_search(&mut self) {}
-    fn search_input(&mut self, _c: char) {}
-    fn search_pop_word(&mut self) {}
-    fn search_history_previous(&mut self) {}
-    fn search_history_next(&mut self) {}
-    fn advance_search_origin(&mut self, _direction: Direction) {}
-    fn search_direction(&self) -> Direction;
-    fn search_active(&self) -> bool;
     fn on_typing_start(&mut self) {}
     fn expand_selection(&mut self) {}
     fn paste(&mut self, _text: &str) {}
@@ -134,26 +122,7 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.write_to_pty(s.clone().into_bytes())
             },
             Action::Command(program) => ctx.spawn_daemon(program.program(), program.args()),
-            Action::Search(SearchAction::SearchFocusNext) => {
-                ctx.advance_search_origin(ctx.search_direction());
-            },
-            Action::Search(SearchAction::SearchFocusPrevious) => {
-                let direction = ctx.search_direction().opposite();
-                ctx.advance_search_origin(direction);
-            },
-            Action::Search(SearchAction::SearchConfirm) => ctx.confirm_search(),
-            Action::Search(SearchAction::SearchCancel) => ctx.cancel_search(),
-            Action::Search(SearchAction::SearchClear) => {
-                let direction = ctx.search_direction();
-                ctx.cancel_search();
-                ctx.start_search(direction);
-            },
-            Action::Search(SearchAction::SearchDeleteWord) => ctx.search_pop_word(),
-            Action::Search(SearchAction::SearchHistoryPrevious) => ctx.search_history_previous(),
-            Action::Search(SearchAction::SearchHistoryNext) => ctx.search_history_next(),
             Action::Mouse(MouseAction::ExpandSelection) => ctx.expand_selection(),
-            Action::SearchForward => ctx.start_search(Direction::Right),
-            Action::SearchBackward => ctx.start_search(Direction::Left),
             Action::Copy => ctx.copy_selection(ClipboardType::Clipboard),
             #[cfg(not(any(target_os = "macos", windows)))]
             Action::CopySelection => ctx.copy_selection(ClipboardType::Selection),
@@ -765,15 +734,6 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             return;
         }
 
-        // Reset search delay when the user is still typing.
-        if self.ctx.search_active() {
-            let timer_id = TimerId::new(Topic::DelayedSearch, self.ctx.window().id());
-            let scheduler = self.ctx.scheduler_mut();
-            if let Some(timer) = scheduler.unschedule(timer_id) {
-                scheduler.schedule(timer.event, TYPING_SEARCH_DELAY, false, timer.id);
-            }
-        }
-
         match input.state {
             ElementState::Pressed => {
                 *self.ctx.received_count() = 0;
@@ -812,12 +772,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         }
 
         // Pass keys to search and ignore them during `suppress_chars`.
-        let search_active = self.ctx.search_active();
-        if suppress_chars || search_active || self.ctx.terminal().mode().contains(TermMode::VI) {
-            if search_active && !suppress_chars {
-                self.ctx.search_input(c);
-            }
-
+        if suppress_chars || self.ctx.terminal().mode().contains(TermMode::VI) {
             return;
         }
 
@@ -858,7 +813,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     /// The provided mode, mods, and key must match what is allowed by a binding
     /// for its action to be executed.
     fn process_key_bindings(&mut self, input: KeyboardInput) {
-        let mode = BindingMode::new(self.ctx.terminal().mode(), self.ctx.search_active());
+        let mode = BindingMode::new(self.ctx.terminal().mode(), false);
         let mods = *self.ctx.modifiers();
         let mut suppress_chars = None;
 
@@ -889,7 +844,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     /// The provided mode, mods, and key must match what is allowed by a binding
     /// for its action to be executed.
     fn process_mouse_bindings(&mut self, button: MouseButton) {
-        let mode = BindingMode::new(self.ctx.terminal().mode(), self.ctx.search_active());
+        let mode = BindingMode::new(self.ctx.terminal().mode(), false);
         let mouse_mode = self.ctx.mouse_mode();
         let mods = *self.ctx.modifiers();
 
@@ -909,13 +864,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     /// Check mouse icon state in relation to the message bar.
     fn message_bar_cursor_state(&self) -> Option<CursorIcon> {
-        // Since search is above the message bar, the button is offset by search's height.
-        let search_height = usize::from(self.ctx.search_active());
-
         // Calculate Y position of the end of the last terminal line.
         let size = self.ctx.size_info();
-        let terminal_end = size.padding_y() as usize
-            + size.cell_height() as usize * (size.screen_lines() + search_height);
+        let terminal_end =
+            size.padding_y() as usize + size.cell_height() as usize * size.screen_lines();
 
         let mouse = self.ctx.mouse();
         let display_offset = self.ctx.terminal().grid().display_offset();
@@ -1009,14 +961,6 @@ mod tests {
     }
 
     impl<'a, T: EventListener> super::ActionContext<T> for ActionContext<'a, T> {
-        fn search_direction(&self) -> Direction {
-            Direction::Right
-        }
-
-        fn search_active(&self) -> bool {
-            false
-        }
-
         fn terminal(&self) -> &Term<T> {
             self.terminal
         }

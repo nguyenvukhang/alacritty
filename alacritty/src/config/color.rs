@@ -13,69 +13,12 @@ pub struct Colors {
     pub bright: BrightColors,
     pub dim: Option<DimColors>,
     pub indexed_colors: Vec<IndexedColor>,
-    pub search: SearchColors,
-    pub line_indicator: LineIndicatorColors,
-    pub hints: HintColors,
     pub transparent_background_colors: bool,
-    footer_bar: BarColors,
-}
-
-impl Colors {
-    pub fn footer_bar_foreground(&self) -> Rgb {
-        self.search.bar.foreground.or(self.footer_bar.foreground).unwrap_or(self.primary.background)
-    }
-
-    pub fn footer_bar_background(&self) -> Rgb {
-        self.search.bar.background.or(self.footer_bar.background).unwrap_or(self.primary.foreground)
-    }
-}
-
-#[derive(ConfigDeserialize, Copy, Clone, Default, Debug, PartialEq, Eq)]
-pub struct LineIndicatorColors {
-    pub foreground: Option<Rgb>,
-    pub background: Option<Rgb>,
-}
-
-#[derive(ConfigDeserialize, Default, Copy, Clone, Debug, PartialEq, Eq)]
-pub struct HintColors {
-    pub start: HintStartColors,
-    pub end: HintEndColors,
-}
-
-#[derive(ConfigDeserialize, Copy, Clone, Debug, PartialEq, Eq)]
-pub struct HintStartColors {
-    pub foreground: CellRgb,
-    pub background: CellRgb,
-}
-
-impl Default for HintStartColors {
-    fn default() -> Self {
-        Self {
-            foreground: CellRgb::Rgb(Rgb { r: 0x1d, g: 0x1f, b: 0x21 }),
-            background: CellRgb::Rgb(Rgb { r: 0xe9, g: 0xff, b: 0x5e }),
-        }
-    }
-}
-
-#[derive(ConfigDeserialize, Copy, Clone, Debug, PartialEq, Eq)]
-pub struct HintEndColors {
-    pub foreground: CellRgb,
-    pub background: CellRgb,
-}
-
-impl Default for HintEndColors {
-    fn default() -> Self {
-        Self {
-            foreground: CellRgb::Rgb(Rgb { r: 0xe9, g: 0xff, b: 0x5e }),
-            background: CellRgb::Rgb(Rgb { r: 0x1d, g: 0x1f, b: 0x21 }),
-        }
-    }
 }
 
 #[derive(Deserialize, Copy, Clone, Default, Debug, PartialEq, Eq)]
 pub struct IndexedColor {
     pub color: Rgb,
-
     index: ColorIndex,
 }
 
@@ -119,49 +62,6 @@ impl Default for InvertedCellColors {
     fn default() -> Self {
         Self { foreground: CellRgb::CellBackground, background: CellRgb::CellForeground }
     }
-}
-
-#[derive(ConfigDeserialize, Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct SearchColors {
-    pub matches: MatchColors,
-    #[config(deprecated = "use `colors.footer_bar` instead")]
-    bar: BarColors,
-}
-
-#[derive(ConfigDeserialize, Debug, Copy, Clone, PartialEq, Eq)]
-pub struct FocusedMatchColors {
-    pub foreground: CellRgb,
-    pub background: CellRgb,
-}
-
-impl Default for FocusedMatchColors {
-    fn default() -> Self {
-        Self {
-            background: CellRgb::Rgb(Rgb { r: 0x00, g: 0x00, b: 0x00 }),
-            foreground: CellRgb::Rgb(Rgb { r: 0xff, g: 0xff, b: 0xff }),
-        }
-    }
-}
-
-#[derive(ConfigDeserialize, Debug, Copy, Clone, PartialEq, Eq)]
-pub struct MatchColors {
-    pub foreground: CellRgb,
-    pub background: CellRgb,
-}
-
-impl Default for MatchColors {
-    fn default() -> Self {
-        Self {
-            background: CellRgb::Rgb(Rgb { r: 0xff, g: 0xff, b: 0xff }),
-            foreground: CellRgb::Rgb(Rgb { r: 0x00, g: 0x00, b: 0x00 }),
-        }
-    }
-}
-
-#[derive(ConfigDeserialize, Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub struct BarColors {
-    foreground: Option<Rgb>,
-    background: Option<Rgb>,
 }
 
 #[derive(ConfigDeserialize, Clone, Debug, PartialEq, Eq)]

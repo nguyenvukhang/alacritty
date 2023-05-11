@@ -22,10 +22,9 @@ use crossfont::{self, Rasterize, Rasterizer};
 use unicode_width::UnicodeWidthChar;
 
 use alacritty_terminal::ansi::{CursorShape, NamedColor};
-use alacritty_terminal::config::MAX_SCROLLBACK_LINES;
 use alacritty_terminal::event::{EventListener, OnResize, WindowSize};
 use alacritty_terminal::grid::Dimensions as TermDimensions;
-use alacritty_terminal::index::{Column, Direction, Point};
+use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Rgb;
@@ -43,7 +42,7 @@ use crate::display::cursor::IntoRects;
 use crate::display::damage::RenderDamageIterator;
 use crate::display::meter::Meter;
 use crate::display::window::Window;
-use crate::event::{Event, EventType, SearchState};
+use crate::event::{Event, EventType};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
 use crate::renderer::{self, GlyphCache, Renderer};
@@ -58,12 +57,6 @@ mod bell;
 mod color;
 mod damage;
 mod meter;
-
-/// Label for the forward terminal search bar.
-const FORWARD_SEARCH_LABEL: &str = "Search: ";
-
-/// Label for the backward terminal search bar.
-const BACKWARD_SEARCH_LABEL: &str = "Backward Search: ";
 
 /// The character used to shorten the visible text like uri preview or search regex.
 const SHORTENER: char = '…';
@@ -575,7 +568,6 @@ impl Display {
         terminal: &mut Term<T>,
         pty_resize_handle: &mut dyn OnResize,
         message_buffer: &MessageBuffer,
-        search_active: bool,
         config: &UiConfig,
     ) where
         T: EventListener,
@@ -621,8 +613,7 @@ impl Display {
 
         // Update number of column/lines in the viewport.
         let message_bar_lines = message_buffer.message().map_or(0, |m| m.text(&new_size).len());
-        let search_lines = usize::from(search_active);
-        new_size.reserve_lines(message_bar_lines + search_lines);
+        new_size.reserve_lines(message_bar_lines);
 
         // Update resize increments.
         if config.window.resize_increments {
@@ -698,10 +689,8 @@ impl Display {
         &mut self,
         terminal: &mut MutexGuard<'_, Term<T>>,
         selection_range: Option<SelectionRange>,
-        search_state: &SearchState,
     ) {
-        let requires_full_damage =
-            self.visual_bell.intensity() != 0. || search_state.regex().is_some();
+        let requires_full_damage = self.visual_bell.intensity() != 0.;
         if requires_full_damage {
             terminal.mark_fully_damaged();
         }
@@ -734,10 +723,9 @@ impl Display {
         scheduler: &mut Scheduler,
         message_buffer: &MessageBuffer,
         config: &UiConfig,
-        search_state: &SearchState,
     ) {
         // Collect renderable content before the terminal is dropped.
-        let mut content = RenderableContent::new(config, self, &terminal, search_state);
+        let mut content = RenderableContent::new(config, self, &terminal);
         let mut grid_cells = Vec::new();
         for cell in &mut content {
             grid_cells.push(cell);
@@ -749,12 +737,11 @@ impl Display {
         let cursor = content.cursor();
 
         let cursor_point = terminal.grid().cursor.point;
-        let total_lines = terminal.grid().total_lines();
         let metrics = self.glyph_cache.font_metrics();
         let size_info = self.size_info;
 
         if self.collect_damage() {
-            self.update_damage(&mut terminal, selection_range, search_state);
+            self.update_damage(&mut terminal, selection_range);
         }
 
         // Drop terminal as early as possible to free lock.
@@ -790,11 +777,6 @@ impl Display {
 
         let mut rects = lines.rects(&metrics, &size_info);
 
-        if search_state.regex().is_some() {
-            // Show current display offset in vi-less search to indicate match position.
-            self.draw_line_indicator(config, total_lines, None, display_offset);
-        };
-
         // Draw cursor.
         rects.extend(cursor.rects(&size_info, config.terminal_config.cursor.thickness()));
 
@@ -813,50 +795,16 @@ impl Display {
         }
 
         // Handle IME positioning and search bar rendering.
-        let ime_position = match search_state.regex() {
-            Some(regex) => {
-                let search_label = match search_state.direction() {
-                    Direction::Right => FORWARD_SEARCH_LABEL,
-                    Direction::Left => BACKWARD_SEARCH_LABEL,
-                };
-
-                let search_text = Self::format_search(regex, search_label, size_info.columns());
-
-                // Render the search bar.
-                self.draw_search(config, &search_text);
-
-                // Draw search bar cursor.
-                let line = size_info.screen_lines();
-                let column = Column(search_text.chars().count() - 1);
-
-                // Add cursor to search bar if IME is not active.
-                if self.ime.preedit().is_none() {
-                    let fg = config.colors.footer_bar_foreground();
-                    let shape = CursorShape::Underline;
-                    let cursor = RenderableCursor::new(Point::new(line, column), shape, fg, false);
-                    rects.extend(
-                        cursor.rects(&size_info, config.terminal_config.cursor.thickness()),
-                    );
-                }
-
-                Some(Point::new(line, column))
-            },
-            None => {
-                let num_lines = self.size_info.screen_lines();
-                term::point_to_viewport(display_offset, cursor_point)
-                    .filter(|point| point.line < num_lines)
-            },
+        let ime_position = {
+            let num_lines = self.size_info.screen_lines();
+            term::point_to_viewport(display_offset, cursor_point)
+                .filter(|point| point.line < num_lines)
         };
 
         // Handle IME.
         if self.ime.is_enabled() {
             if let Some(point) = ime_position {
-                let (fg, bg) = if search_state.regex().is_some() {
-                    (config.colors.footer_bar_foreground(), config.colors.footer_bar_background())
-                } else {
-                    (foreground_color, background_color)
-                };
-
+                let (fg, bg) = (foreground_color, background_color);
                 self.draw_ime_preview(point, fg, bg, &mut rects, config);
             }
         }
@@ -866,11 +814,10 @@ impl Display {
         }
 
         if let Some(message) = message_buffer.message() {
-            let search_offset = usize::from(search_state.regex().is_some());
             let text = message.text(&size_info);
 
             // Create a new rectangle for the background.
-            let start_line = size_info.screen_lines() + search_offset;
+            let start_line = size_info.screen_lines();
             let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
 
             let bg = match message.ty() {
@@ -1033,52 +980,6 @@ impl Display {
         self.window.update_ime_position(ime_popup_point, &self.size_info);
     }
 
-    /// Format search regex to account for the cursor and fullwidth characters.
-    fn format_search(search_regex: &str, search_label: &str, max_width: usize) -> String {
-        let label_len = search_label.len();
-
-        // Skip `search_regex` formatting if only label is visible.
-        if label_len > max_width {
-            return search_label[..max_width].to_owned();
-        }
-
-        // The search string consists of `search_label` + `search_regex` + `cursor`.
-        let mut bar_text = String::from(search_label);
-        bar_text.extend(StrShortener::new(
-            search_regex,
-            max_width.wrapping_sub(label_len + 1),
-            ShortenDirection::Left,
-            Some(SHORTENER),
-        ));
-
-        // Add place for cursor.
-        bar_text.push(' ');
-
-        bar_text
-    }
-
-    /// Draw current search regex.
-    #[inline(never)]
-    fn draw_search(&mut self, config: &UiConfig, text: &str) {
-        // Assure text length is at least num_cols.
-        let num_cols = self.size_info.columns();
-        let text = format!("{:<1$}", text, num_cols);
-
-        let point = Point::new(self.size_info.screen_lines(), Column(0));
-
-        let fg = config.colors.footer_bar_foreground();
-        let bg = config.colors.footer_bar_background();
-
-        self.renderer.draw_string(
-            point,
-            fg,
-            bg,
-            text.chars(),
-            &self.size_info,
-            &mut self.glyph_cache,
-        );
-    }
-
     /// Draw render timer.
     #[inline(never)]
     fn draw_render_timer(&mut self, config: &UiConfig) {
@@ -1103,49 +1004,6 @@ impl Display {
 
         let glyph_cache = &mut self.glyph_cache;
         self.renderer.draw_string(point, fg, bg, timing.chars(), &self.size_info, glyph_cache);
-    }
-
-    /// Draw an indicator for the position of a line in history.
-    #[inline(never)]
-    fn draw_line_indicator(
-        &mut self,
-        config: &UiConfig,
-        total_lines: usize,
-        obstructed_column: Option<Column>,
-        line: usize,
-    ) {
-        const fn num_digits(mut number: u32) -> usize {
-            let mut res = 0;
-            loop {
-                number /= 10;
-                res += 1;
-                if number == 0 {
-                    break res;
-                }
-            }
-        }
-
-        let text = format!("[{}/{}]", line, total_lines - 1);
-        let column = Column(self.size_info.columns().saturating_sub(text.len()));
-        let point = Point::new(0, column);
-
-        // Damage the maximum possible length of the format text, which could be achieved when
-        // using `MAX_SCROLLBACK_LINES` as current and total lines adding a `3` for formatting.
-        const MAX_SIZE: usize = 2 * num_digits(MAX_SCROLLBACK_LINES) + 3;
-        let damage_point = Point::new(0, Column(self.size_info.columns().saturating_sub(MAX_SIZE)));
-        if self.collect_damage() {
-            self.damage_rects.push(self.damage_from_point(damage_point, MAX_SIZE as u32));
-        }
-
-        let colors = &config.colors;
-        let fg = colors.line_indicator.foreground.unwrap_or(colors.primary.background);
-        let bg = colors.line_indicator.background.unwrap_or(colors.primary.foreground);
-
-        // Do not render anything if it would obscure the vi mode cursor.
-        if obstructed_column.map_or(true, |obstructed_column| obstructed_column < column) {
-            let glyph_cache = &mut self.glyph_cache;
-            self.renderer.draw_string(point, fg, bg, text.chars(), &self.size_info, glyph_cache);
-        }
     }
 
     /// Damage `len` starting from a `point`.

@@ -89,10 +89,6 @@ pub enum Action {
     #[config(skip)]
     Command(Program),
 
-    /// Perform search mode action.
-    #[config(skip)]
-    Search(SearchAction),
-
     /// Perform mouse binding exclusive action.
     #[config(skip)]
     Mouse(MouseAction),
@@ -184,12 +180,6 @@ pub enum Action {
     /// Allow receiving char input.
     ReceiveChar,
 
-    /// Start a forward buffer search.
-    SearchForward,
-
-    /// Start a backward buffer search.
-    SearchBackward,
-
     /// No action.
     None,
 }
@@ -197,12 +187,6 @@ pub enum Action {
 impl From<&'static str> for Action {
     fn from(s: &'static str) -> Action {
         Action::Esc(s.into())
-    }
-}
-
-impl From<SearchAction> for Action {
-    fn from(action: SearchAction) -> Self {
-        Self::Search(action)
     }
 }
 
@@ -245,28 +229,6 @@ pub enum ViAction {
     Open,
     /// Centers the screen around the vi mode cursor.
     CenterAroundViCursor,
-}
-
-/// Search mode specific actions.
-#[allow(clippy::enum_variant_names)]
-#[derive(ConfigDeserialize, Debug, Copy, Clone, PartialEq, Eq)]
-pub enum SearchAction {
-    /// Move the focus to the next search match.
-    SearchFocusNext,
-    /// Move the focus to the previous search match.
-    SearchFocusPrevious,
-    /// Confirm the active search.
-    SearchConfirm,
-    /// Cancel the active search.
-    SearchCancel,
-    /// Reset the search regex.
-    SearchClear,
-    /// Delete the last word in the search regex.
-    SearchDeleteWord,
-    /// Go to the previous regex in the search history.
-    SearchHistoryPrevious,
-    /// Go to the next regex in the search history.
-    SearchHistoryNext,
 }
 
 /// Mouse binding specific actions.
@@ -444,24 +406,6 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
         Y,                             +BindingMode::VI, ~BindingMode::SEARCH; Action::Copy;
         Y,                             +BindingMode::VI, ~BindingMode::SEARCH;
             Action::ClearSelection;
-        Slash,                         +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::SearchForward;
-        Slash,  ModifiersState::SHIFT, +BindingMode::VI, ~BindingMode::SEARCH;
-            Action::SearchBackward;
-        Return,                        +BindingMode::SEARCH, +BindingMode::VI;
-            SearchAction::SearchConfirm;
-        Escape,                        +BindingMode::SEARCH; SearchAction::SearchCancel;
-        C,      ModifiersState::CTRL,  +BindingMode::SEARCH; SearchAction::SearchCancel;
-        U,      ModifiersState::CTRL,  +BindingMode::SEARCH; SearchAction::SearchClear;
-        W,      ModifiersState::CTRL,  +BindingMode::SEARCH; SearchAction::SearchDeleteWord;
-        P,      ModifiersState::CTRL,  +BindingMode::SEARCH; SearchAction::SearchHistoryPrevious;
-        N,      ModifiersState::CTRL,  +BindingMode::SEARCH; SearchAction::SearchHistoryNext;
-        Up,                            +BindingMode::SEARCH; SearchAction::SearchHistoryPrevious;
-        Down,                          +BindingMode::SEARCH; SearchAction::SearchHistoryNext;
-        Return,                        +BindingMode::SEARCH, ~BindingMode::VI;
-            SearchAction::SearchFocusNext;
-        Return, ModifiersState::SHIFT, +BindingMode::SEARCH, ~BindingMode::VI;
-            SearchAction::SearchFocusPrevious;
     );
 
     //   Code     Modifiers
@@ -571,10 +515,6 @@ fn common_keybindings() -> Vec<KeyBinding> {
         KeyBinding;
         V,        ModifiersState::CTRL | ModifiersState::SHIFT, ~BindingMode::VI; Action::Paste;
         C,        ModifiersState::CTRL | ModifiersState::SHIFT; Action::Copy;
-        F,        ModifiersState::CTRL | ModifiersState::SHIFT, ~BindingMode::SEARCH;
-            Action::SearchForward;
-        B,        ModifiersState::CTRL | ModifiersState::SHIFT, ~BindingMode::SEARCH;
-            Action::SearchBackward;
         C,        ModifiersState::CTRL | ModifiersState::SHIFT,
             +BindingMode::VI, ~BindingMode::SEARCH; Action::ClearSelection;
         Insert,   ModifiersState::SHIFT, ~BindingMode::VI; Action::PasteSelection;
@@ -627,8 +567,6 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         M, ModifiersState::LOGO; Action::Minimize;
         Q, ModifiersState::LOGO; Action::Quit;
         W, ModifiersState::LOGO; Action::Quit;
-        F, ModifiersState::LOGO, ~BindingMode::SEARCH; Action::SearchForward;
-        B, ModifiersState::LOGO, ~BindingMode::SEARCH; Action::SearchBackward;
     )
 }
 
@@ -952,11 +890,8 @@ impl<'a> Deserialize<'a> for RawBinding {
 
                             let value = map.next_value::<SerdeValue>()?;
 
-                            action = if let Ok(search_action) =
-                                SearchAction::deserialize(value.clone())
-                            {
-                                Some(search_action.into())
-                            } else if let Ok(mouse_action) = MouseAction::deserialize(value.clone())
+                            action = if let Ok(mouse_action) =
+                                MouseAction::deserialize(value.clone())
                             {
                                 Some(mouse_action.into())
                             } else {
@@ -1013,16 +948,6 @@ impl<'a> Deserialize<'a> for RawBinding {
                 let mods = mods.unwrap_or_default();
 
                 let action = match (action, chars, command) {
-                    (Some(action @ Action::Search(_)), None, None) => {
-                        if !mode.intersects(BindingMode::SEARCH) {
-                            return Err(V::Error::custom(format!(
-                                "action `{}` is only available in search mode, try adding `mode: \
-                                 Search`",
-                                action,
-                            )));
-                        }
-                        action
-                    },
                     (Some(action @ Action::Mouse(_)), None, None) => {
                         if mouse.is_none() {
                             return Err(V::Error::custom(format!(

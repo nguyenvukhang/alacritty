@@ -1,20 +1,13 @@
 use std::path::PathBuf;
 
 use log::error;
-use serde::de::Error as SerdeError;
 use serde::{self, Deserialize, Deserializer};
-use unicode_width::UnicodeWidthChar;
-use winit::event::{ModifiersState, VirtualKeyCode};
 
 use alacritty_config_derive::{ConfigDeserialize, SerdeReplace};
-use alacritty_terminal::config::{
-    Config as TerminalConfig, Percentage, Program, LOG_TARGET_CONFIG,
-};
+use alacritty_terminal::config::{Config as TerminalConfig, Percentage, LOG_TARGET_CONFIG};
 
 use crate::config::bell::BellConfig;
-use crate::config::bindings::{
-    self, Action, Binding, Key, KeyBinding, ModeWrapper, ModsWrapper, MouseBinding,
-};
+use crate::config::bindings::{self, Binding, KeyBinding, MouseBinding};
 use crate::config::color::Colors;
 use crate::config::debug::Debug;
 use crate::config::font::Font;
@@ -55,9 +48,6 @@ pub struct UiConfig {
     #[config(skip)]
     pub config_paths: Vec<PathBuf>,
 
-    /// Regex hints for interacting with terminal content.
-    pub hints: Hints,
-
     /// Offer IPC through a unix socket.
     #[cfg(unix)]
     pub ipc_socket: bool,
@@ -96,32 +86,11 @@ impl Default for UiConfig {
             bell: Default::default(),
             colors: Default::default(),
             draw_bold_text_with_bright_colors: Default::default(),
-            hints: Default::default(),
         }
     }
 }
 
 impl UiConfig {
-    /// Generate key bindings for all keyboard hints.
-    pub fn generate_hint_bindings(&mut self) {
-        for hint in &self.hints.enabled {
-            let binding = match hint.binding {
-                Some(binding) => binding,
-                None => continue,
-            };
-
-            let binding = KeyBinding {
-                trigger: binding.key,
-                mods: binding.mods.0,
-                mode: binding.mode.mode,
-                notmode: binding.mode.not_mode,
-                action: Action::None,
-            };
-
-            self.key_bindings.0.push(binding);
-        }
-    }
-
     #[inline]
     pub fn window_opacity(&self) -> f32 {
         self.background_opacity.unwrap_or(self.window.opacity).as_f32()
@@ -213,135 +182,4 @@ pub struct Delta<T: Default> {
     pub x: T,
     /// Vertical change.
     pub y: T,
-}
-
-/// Regex terminal hints.
-#[derive(ConfigDeserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Hints {
-    /// Characters for the hint labels.
-    alphabet: HintsAlphabet,
-
-    /// All configured terminal hints.
-    pub enabled: Vec<Hint>,
-}
-
-impl Default for Hints {
-    fn default() -> Self {
-        #[cfg(not(any(target_os = "macos", windows)))]
-        let action = HintAction::Command(Program::Just(String::from("xdg-open")));
-        #[cfg(target_os = "macos")]
-        let action = HintAction::Command(Program::Just(String::from("open")));
-        #[cfg(windows)]
-        let action = HintAction::Command(Program::WithArgs {
-            program: String::from("cmd"),
-            args: vec!["/c".to_string(), "start".to_string(), "".to_string()],
-        });
-
-        Self {
-            enabled: vec![Hint {
-                action,
-                post_processing: true,
-                mouse: Some(HintMouse { enabled: true, mods: Default::default() }),
-                binding: Some(HintBinding {
-                    key: Key::Keycode(VirtualKeyCode::U),
-                    mods: ModsWrapper(ModifiersState::SHIFT | ModifiersState::CTRL),
-                    mode: Default::default(),
-                }),
-            }],
-            alphabet: Default::default(),
-        }
-    }
-}
-
-#[derive(SerdeReplace, Clone, Debug, PartialEq, Eq)]
-struct HintsAlphabet(String);
-
-impl Default for HintsAlphabet {
-    fn default() -> Self {
-        Self(String::from("jfkdls;ahgurieowpq"))
-    }
-}
-
-impl<'de> Deserialize<'de> for HintsAlphabet {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-
-        let mut character_count = 0;
-        for character in value.chars() {
-            if character.width() != Some(1) {
-                return Err(D::Error::custom("characters must be of width 1"));
-            }
-            character_count += 1;
-        }
-
-        if character_count < 2 {
-            return Err(D::Error::custom("must include at last 2 characters"));
-        }
-
-        Ok(Self(value))
-    }
-}
-
-/// Built-in actions for hint mode.
-#[derive(ConfigDeserialize, Clone, Debug, PartialEq, Eq)]
-pub enum HintInternalAction {
-    /// Copy the text to the clipboard.
-    Copy,
-    /// Write the text to the PTY/search.
-    Paste,
-    /// Select the text matching the hint.
-    Select,
-}
-
-/// Actions for hint bindings.
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
-pub enum HintAction {
-    /// Built-in hint action.
-    #[serde(rename = "action")]
-    Action(HintInternalAction),
-
-    /// Command the text will be piped to.
-    #[serde(rename = "command")]
-    Command(Program),
-}
-
-/// Hint configuration.
-#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Hint {
-    /// Action executed when this hint is triggered.
-    #[serde(flatten)]
-    pub action: HintAction,
-
-    /// Hint text post processing.
-    #[serde(default)]
-    pub post_processing: bool,
-
-    /// Hint mouse highlighting.
-    pub mouse: Option<HintMouse>,
-
-    /// Binding required to search for this hint.
-    binding: Option<HintBinding>,
-}
-
-/// Binding for triggering a keyboard hint.
-#[derive(Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
-pub struct HintBinding {
-    pub key: Key,
-    #[serde(default)]
-    pub mods: ModsWrapper,
-    #[serde(default)]
-    pub mode: ModeWrapper,
-}
-
-/// Hint mouse highlighting.
-#[derive(ConfigDeserialize, Default, Copy, Clone, Debug, PartialEq, Eq)]
-pub struct HintMouse {
-    /// Hint mouse highlighting availability.
-    pub enabled: bool,
-
-    /// Required mouse modifiers for hint highlighting.
-    pub mods: ModsWrapper,
 }

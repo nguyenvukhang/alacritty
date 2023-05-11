@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::cmp::{max, min};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::ffi::OsStr;
 use std::fmt::Debug;
@@ -36,7 +36,7 @@ use alacritty_terminal::config::LOG_TARGET_CONFIG;
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
 use alacritty_terminal::event_loop::Notifier;
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Direction, Line, Point, Side};
+use alacritty_terminal::index::{Column, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 
@@ -54,12 +54,6 @@ use crate::input::{self, ActionContext as _, FONT_SIZE_STEP};
 use crate::message_bar::{Message, MessageBuffer};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::window_context::WindowContext;
-
-/// Duration after the last user input until an unlimited search is performed.
-pub const TYPING_SEARCH_DELAY: Duration = Duration::from_millis(500);
-
-/// Maximum number of search terms stored in the history.
-const MAX_SEARCH_HISTORY_SIZE: usize = 255;
 
 /// Touch zoom speed.
 const TOUCH_ZOOM_FACTOR: f32 = 0.01;
@@ -108,58 +102,6 @@ impl From<TerminalEvent> for EventType {
     }
 }
 
-/// Regex search state.
-pub struct SearchState {
-    /// Search direction.
-    pub direction: Direction,
-
-    /// Current position in the search history.
-    pub history_index: Option<usize>,
-
-    /// Change in display offset since the beginning of the search.
-    display_offset_delta: i32,
-
-    /// Search origin in viewport coordinates relative to original display offset.
-    origin: Point,
-
-    /// Search regex and history.
-    ///
-    /// During an active search, the first element is the user's current input.
-    ///
-    /// While going through history, the [`SearchState::history_index`] will point to the element
-    /// in history which is currently being previewed.
-    history: VecDeque<String>,
-}
-
-impl SearchState {
-    /// Search regex text if a search is active.
-    pub fn regex(&self) -> Option<&String> {
-        self.history_index.and_then(|index| self.history.get(index))
-    }
-
-    /// Direction of the search from the search origin.
-    pub fn direction(&self) -> Direction {
-        self.direction
-    }
-
-    /// Search regex text if a search is active.
-    fn regex_mut(&mut self) -> Option<&mut String> {
-        self.history_index.and_then(move |index| self.history.get_mut(index))
-    }
-}
-
-impl Default for SearchState {
-    fn default() -> Self {
-        Self {
-            direction: Direction::Right,
-            display_offset_delta: Default::default(),
-            history_index: Default::default(),
-            history: Default::default(),
-            origin: Default::default(),
-        }
-    }
-}
-
 pub struct ActionContext<'a, N, T> {
     pub notifier: &'a mut N,
     pub terminal: &'a mut Term<T>,
@@ -176,7 +118,6 @@ pub struct ActionContext<'a, N, T> {
     pub event_loop: &'a EventLoopWindowTarget<Event>,
     pub event_proxy: &'a EventLoopProxy<Event>,
     pub scheduler: &'a mut Scheduler,
-    pub search_state: &'a mut SearchState,
     pub font_size: &'a mut Size,
     pub dirty: &'a mut bool,
     pub occluded: &'a mut bool,
@@ -210,11 +151,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         self.terminal.scroll_display(scroll);
 
         let lines_changed = old_offset - self.terminal.grid().display_offset() as i32;
-
-        // Keep track of manual display offset changes during search.
-        if self.search_active() {
-            self.search_state.display_offset_delta += lines_changed;
-        }
 
         // Update selection.
         if self.mouse.left_button_state == ElementState::Pressed
@@ -267,7 +203,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         selection.update(point, side);
 
         // Move vi cursor and expand selection.
-        if self.terminal.mode().contains(TermMode::VI) && !self.search_active() {
+        if self.terminal.mode().contains(TermMode::VI) {
             selection.include_all();
         }
 
@@ -432,145 +368,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         }
     }
 
-    #[inline]
-    fn start_search(&mut self, direction: Direction) {
-        // Only create new history entry if the previous regex wasn't empty.
-        if self.search_state.history.get(0).map_or(true, |regex| !regex.is_empty()) {
-            self.search_state.history.push_front(String::new());
-            self.search_state.history.truncate(MAX_SEARCH_HISTORY_SIZE);
-        }
-
-        self.search_state.history_index = Some(0);
-        self.search_state.direction = direction;
-
-        // Store original search position as origin and reset location.
-        if self.terminal.mode().contains(TermMode::VI) {
-            self.search_state.display_offset_delta = 0;
-
-            // Adjust origin for content moving upward on search start.
-            if self.terminal.grid().cursor.point.line + 1 == self.terminal.screen_lines() {
-                self.search_state.origin.line -= 1;
-            }
-        } else {
-            let viewport_top = Line(-(self.terminal.grid().display_offset() as i32)) - 1;
-            let viewport_bottom = viewport_top + self.terminal.bottommost_line();
-            let last_column = self.terminal.last_column();
-            self.search_state.origin = match direction {
-                Direction::Right => Point::new(viewport_top, Column(0)),
-                Direction::Left => Point::new(viewport_bottom, last_column),
-            };
-        }
-
-        // Enable IME so we can input into the search bar with it if we were in Vi mode.
-        self.window().set_ime_allowed(true);
-
-        self.display.pending_update.dirty = true;
-    }
-
-    #[inline]
-    fn confirm_search(&mut self) {
-        // Just cancel search when not in vi mode.
-        if !self.terminal.mode().contains(TermMode::VI) {
-            self.cancel_search();
-            return;
-        }
-
-        self.exit_search();
-    }
-
-    #[inline]
-    fn cancel_search(&mut self) {
-        if self.terminal.mode().contains(TermMode::VI) {
-            // Recover pre-search state in vi mode.
-            self.search_reset_state();
-        }
-
-        self.exit_search();
-    }
-
-    #[inline]
-    fn search_input(&mut self, c: char) {
-        match self.search_state.history_index {
-            Some(0) => (),
-            // When currently in history, replace active regex with history on change.
-            Some(index) => {
-                self.search_state.history[0] = self.search_state.history[index].clone();
-                self.search_state.history_index = Some(0);
-            },
-            None => return,
-        }
-        let regex = &mut self.search_state.history[0];
-
-        match c {
-            // Handle backspace/ctrl+h.
-            '\x08' | '\x7f' => {
-                let _ = regex.pop();
-            },
-            // Add ascii and unicode text.
-            ' '..='~' | '\u{a0}'..='\u{10ffff}' => regex.push(c),
-            // Ignore non-printable characters.
-            _ => return,
-        }
-
-        if !self.terminal.mode().contains(TermMode::VI) {
-            // Clear selection so we do not obstruct any matches.
-            self.terminal.selection = None;
-        }
-
-        self.update_search();
-    }
-
-    #[inline]
-    fn search_pop_word(&mut self) {
-        if let Some(regex) = self.search_state.regex_mut() {
-            *regex = regex.trim_end().to_owned();
-            regex.truncate(regex.rfind(' ').map_or(0, |i| i + 1));
-            self.update_search();
-        }
-    }
-
-    /// Go to the previous regex in the search history.
-    #[inline]
-    fn search_history_previous(&mut self) {
-        let index = match &mut self.search_state.history_index {
-            None => return,
-            Some(index) if *index + 1 >= self.search_state.history.len() => return,
-            Some(index) => index,
-        };
-
-        *index += 1;
-        self.update_search();
-    }
-
-    /// Go to the previous regex in the search history.
-    #[inline]
-    fn search_history_next(&mut self) {
-        let index = match &mut self.search_state.history_index {
-            Some(0) | None => return,
-            Some(index) => index,
-        };
-
-        *index -= 1;
-        self.update_search();
-    }
-
-    #[inline]
-    fn advance_search_origin(&mut self, direction: Direction) {
-        // Search for the next match using the supplied direction.
-        let search_direction = mem::replace(&mut self.search_state.direction, direction);
-        self.search_state.direction = search_direction;
-    }
-
-    #[inline]
-    fn search_direction(&self) -> Direction {
-        self.search_state.direction
-    }
-
-    #[inline]
-    fn search_active(&self) -> bool {
-        self.search_state.history_index.is_some()
-    }
-
     /// Handle keyboard typing start.
     ///
     /// This will temporarily disable some features like terminal cursor blinking or the mouse
@@ -631,11 +428,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     /// Paste a text into the terminal.
     fn paste(&mut self, text: &str) {
-        if self.search_active() {
-            for c in text.chars() {
-                self.search_input(c);
-            }
-        } else if self.terminal().mode().contains(TermMode::BRACKETED_PASTE) {
+        if self.terminal().mode().contains(TermMode::BRACKETED_PASTE) {
             self.write_to_pty(&b"\x1b[200~"[..]);
 
             // Write filtered escape sequences.
@@ -680,51 +473,6 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 }
 
 impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
-    fn update_search(&mut self) {
-        let regex = match self.search_state.regex() {
-            Some(regex) => regex,
-            None => return,
-        };
-
-        // Hide cursor while typing into the search bar.
-        if self.config.mouse.hide_when_typing {
-            self.display.window.set_mouse_visible(false);
-        }
-
-        if regex.is_empty() {
-            // Stop search if there's nothing to search for.
-            self.search_reset_state();
-        }
-
-        *self.dirty = true;
-    }
-
-    /// Reset terminal to the state before search was started.
-    fn search_reset_state(&mut self) {
-        // Unschedule pending timers.
-        let timer_id = TimerId::new(Topic::DelayedSearch, self.display.window.id());
-        self.scheduler.unschedule(timer_id);
-
-        // The viewport reset logic is only needed for vi mode, since without it our origin is
-        // always at the current display offset instead of at the vi cursor position which we need
-        // to recover to.
-        if !self.terminal.mode().contains(TermMode::VI) {
-            return;
-        }
-
-        // Reset display offset and cursor position.
-        self.terminal.scroll_display(Scroll::Delta(self.search_state.display_offset_delta));
-        self.search_state.display_offset_delta = 0;
-
-        *self.dirty = true;
-    }
-
-    /// Cleanup the search state.
-    fn exit_search(&mut self) {
-        self.display.pending_update.dirty = true;
-        self.search_state.history_index = None;
-    }
-
     /// Update the cursor blinking state.
     fn update_cursor_blinking(&mut self) {
         let cursor_style = self.config.terminal_config.cursor.style;

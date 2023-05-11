@@ -12,7 +12,6 @@ use alacritty_terminal::term::{self, RenderableContent as TerminalContent, Term}
 use crate::config::UiConfig;
 use crate::display::color::{List, DIM_FACTOR};
 use crate::display::Display;
-use crate::event::SearchState;
 
 /// Minimum contrast between a fixed cursor color and the cell's background.
 pub const MIN_CURSOR_CONTRAST: f64 = 1.5;
@@ -34,14 +33,12 @@ impl<'a> RenderableContent<'a> {
         config: &'a UiConfig,
         display: &'a mut Display,
         term: &'a Term<T>,
-        search_state: &'a SearchState,
     ) -> Self {
         let terminal_content = term.renderable_content();
 
         // Find terminal cursor shape.
         let cursor_shape = if terminal_content.cursor.shape == CursorShape::Hidden
             || display.cursor_hidden
-            || search_state.regex().is_some()
             || display.ime.preedit().is_some()
         {
             CursorShape::Hidden

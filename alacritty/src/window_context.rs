@@ -28,8 +28,7 @@ use winit::window::WindowId;
 use alacritty_config::SerdeReplace;
 use alacritty_terminal::event::Event as TerminalEvent;
 use alacritty_terminal::event_loop::{EventLoop as PtyEventLoop, Msg, Notifier};
-use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::Direction;
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::Term;
@@ -42,7 +41,7 @@ use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
 use crate::display::window::Window;
 use crate::display::Display;
-use crate::event::{ActionContext, Event, EventProxy, EventType, Mouse, SearchState, TouchPurpose};
+use crate::event::{ActionContext, Event, EventProxy, EventType, Mouse, TouchPurpose};
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 use crate::message_bar::MessageBuffer;
 use crate::scheduler::Scheduler;
@@ -56,7 +55,6 @@ pub struct WindowContext {
     terminal: Arc<FairMutex<Term<EventProxy>>>,
     cursor_blink_timed_out: bool,
     modifiers: ModifiersState,
-    search_state: SearchState,
     received_count: usize,
     suppress_chars: bool,
     notifier: Notifier,
@@ -251,7 +249,6 @@ impl WindowContext {
             suppress_chars: Default::default(),
             message_buffer: Default::default(),
             received_count: Default::default(),
-            search_state: Default::default(),
             event_queue: Default::default(),
             ipc_config: Default::default(),
             modifiers: Default::default(),
@@ -428,14 +425,11 @@ impl WindowContext {
 
         let mut terminal = self.terminal.lock();
 
-        let old_is_searching = self.search_state.history_index.is_some();
-
         let context = ActionContext {
             cursor_blink_timed_out: &mut self.cursor_blink_timed_out,
             message_buffer: &mut self.message_buffer,
             received_count: &mut self.received_count,
             suppress_chars: &mut self.suppress_chars,
-            search_state: &mut self.search_state,
             modifiers: &mut self.modifiers,
             font_size: &mut self.font_size,
             notifier: &mut self.notifier,
@@ -469,8 +463,6 @@ impl WindowContext {
                 &mut self.display,
                 &mut self.notifier,
                 &self.message_buffer,
-                &self.search_state,
-                old_is_searching,
                 &self.config,
             );
             self.dirty = true;
@@ -497,13 +489,7 @@ impl WindowContext {
             }
 
             // Redraw the window.
-            self.display.draw(
-                terminal,
-                scheduler,
-                &self.message_buffer,
-                &self.config,
-                &self.search_state,
-            );
+            self.display.draw(terminal, scheduler, &self.message_buffer, &self.config);
         }
     }
 
@@ -546,33 +532,9 @@ impl WindowContext {
         display: &mut Display,
         notifier: &mut Notifier,
         message_buffer: &MessageBuffer,
-        search_state: &SearchState,
-        old_is_searching: bool,
         config: &UiConfig,
     ) {
-        // Compute cursor positions before resize.
-        let num_lines = terminal.screen_lines();
-        let cursor_at_bottom = terminal.grid().cursor.point.line + 1 == num_lines;
-        let origin_at_bottom = search_state.direction == Direction::Left;
-
-        display.handle_update(
-            terminal,
-            notifier,
-            message_buffer,
-            search_state.history_index.is_some(),
-            config,
-        );
-
-        let new_is_searching = search_state.history_index.is_some();
-        if !old_is_searching && new_is_searching {
-            // Scroll on search start to make sure origin is visible with minimal viewport motion.
-            let display_offset = terminal.grid().display_offset();
-            if display_offset == 0 && cursor_at_bottom && !origin_at_bottom {
-                terminal.scroll_display(Scroll::Delta(1));
-            } else if display_offset != 0 && origin_at_bottom {
-                terminal.scroll_display(Scroll::Delta(-1));
-            }
-        }
+        display.handle_update(terminal, notifier, message_buffer, config);
     }
 }
 
