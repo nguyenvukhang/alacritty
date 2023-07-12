@@ -6,7 +6,6 @@ use serde::{self, Deserialize, Deserializer};
 use alacritty_config_derive::{ConfigDeserialize, SerdeReplace};
 use alacritty_terminal::config::{Config as TerminalConfig, Percentage, LOG_TARGET_CONFIG};
 
-use crate::config::bell::BellConfig;
 use crate::config::bindings::{self, Binding, KeyBinding, MouseBinding};
 use crate::config::color::Colors;
 use crate::config::debug::Debug;
@@ -34,9 +33,6 @@ pub struct UiConfig {
 
     /// Live config reload.
     pub live_config_reload: bool,
-
-    /// Bell configuration.
-    pub bell: BellConfig,
 
     /// RGB values for colors.
     pub colors: Colors,
@@ -83,7 +79,6 @@ impl Default for UiConfig {
             mouse_bindings: Default::default(),
             terminal_config: Default::default(),
             background_opacity: Default::default(),
-            bell: Default::default(),
             colors: Default::default(),
             draw_bold_text_with_bright_colors: Default::default(),
         }

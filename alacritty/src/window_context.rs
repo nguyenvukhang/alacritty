@@ -483,11 +483,6 @@ impl WindowContext {
 
             self.dirty = false;
 
-            // Request immediate re-draw if visual bell animation is not finished yet.
-            if !self.display.visual_bell.completed() {
-                self.display.window.request_redraw();
-            }
-
             // Redraw the window.
             self.display.draw(terminal, scheduler, &self.message_buffer, &self.config);
         }

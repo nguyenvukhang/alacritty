@@ -85,7 +85,6 @@ dependencies = [
  "miow 0.3.7",
  "nix 0.24.2",
  "parking_lot 0.12.1",
- "regex-automata",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1437,21 +1436,6 @@ dependencies = [
  "redox_syscall 0.2.16",
  "thiserror",
 ]
-
-[[package]]
-name = "regex-automata"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c230d73fb8d8c1b9c0b3135c5142a8acee3a0558fb8db5cf1cb65f8d7862132"
-dependencies = [
- "regex-syntax",
-]
-
-[[package]]
-name = "regex-syntax"
-version = "0.6.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3f87b73ce11b1619a3c6332f45341e0047173771e8b8b73f87bfeefb7b56244"
 
 [[package]]
 name = "rustc_version"

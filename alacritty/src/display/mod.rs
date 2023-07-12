@@ -35,7 +35,6 @@ use crate::config::window::Dimensions;
 #[cfg(not(windows))]
 use crate::config::window::StartupMode;
 use crate::config::UiConfig;
-use crate::display::bell::VisualBell;
 use crate::display::color::List;
 use crate::display::content::{RenderableContent, RenderableCursor};
 use crate::display::cursor::IntoRects;
@@ -53,7 +52,6 @@ pub mod content;
 pub mod cursor;
 pub mod window;
 
-mod bell;
 mod color;
 mod damage;
 mod meter;
@@ -334,8 +332,6 @@ pub struct Display {
     /// UI cursor visibility for blinking.
     pub cursor_hidden: bool,
 
-    pub visual_bell: VisualBell,
-
     /// Mapped RGB values for each terminal color.
     pub colors: List,
 
@@ -488,7 +484,6 @@ impl Display {
             is_wayland,
             cursor_hidden: false,
             frame_timer: FrameTimer::new(),
-            visual_bell: VisualBell::from(&config.bell),
             colors: List::from(&config.colors),
             pending_update: Default::default(),
             pending_renderer_update: Default::default(),
@@ -690,11 +685,6 @@ impl Display {
         terminal: &mut MutexGuard<'_, Term<T>>,
         selection_range: Option<SelectionRange>,
     ) {
-        let requires_full_damage = self.visual_bell.intensity() != 0.;
-        if requires_full_damage {
-            terminal.mark_fully_damaged();
-        }
-
         match terminal.damage(selection_range) {
             TermDamage::Full => self.fully_damage(),
             TermDamage::Partial(damaged_lines) => {
@@ -705,11 +695,6 @@ impl Display {
             },
         }
         terminal.reset_damage();
-
-        // Ensure that the content requiring full damage is cleaned up again on the next frame.
-        if requires_full_damage {
-            terminal.mark_fully_damaged();
-        }
     }
 
     /// Draw the screen.
@@ -779,20 +764,6 @@ impl Display {
 
         // Draw cursor.
         rects.extend(cursor.rects(&size_info, config.terminal_config.cursor.thickness()));
-
-        // Push visual bell after url/underline/strikeout rects.
-        let visual_bell_intensity = self.visual_bell.intensity();
-        if visual_bell_intensity != 0. {
-            let visual_bell_rect = RenderRect::new(
-                0.,
-                0.,
-                size_info.width(),
-                size_info.height(),
-                config.bell.color,
-                visual_bell_intensity as f32,
-            );
-            rects.push(visual_bell_rect);
-        }
 
         // Handle IME positioning and search bar rendering.
         let ime_position = {
@@ -887,7 +858,6 @@ impl Display {
     /// Update to a new configuration.
     pub fn update_config(&mut self, config: &UiConfig) {
         self.debug_damage = config.debug.highlight_damage;
-        self.visual_bell.update_config(&config.bell);
         self.colors = List::from(&config.colors);
     }
 

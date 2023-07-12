@@ -720,21 +720,6 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         }
                     },
                     TerminalEvent::Wakeup => *self.ctx.dirty = true,
-                    TerminalEvent::Bell => {
-                        // Set window urgency.
-                        if self.ctx.terminal.mode().contains(TermMode::URGENCY_HINTS) {
-                            let focused = self.ctx.terminal.is_focused;
-                            self.ctx.window().set_urgent(!focused);
-                        }
-
-                        // Ring visual bell.
-                        self.ctx.display.visual_bell.ring();
-
-                        // Execute bell command.
-                        if let Some(bell_command) = &self.ctx.config.bell.command {
-                            self.ctx.spawn_daemon(bell_command.program(), bell_command.args());
-                        }
-                    },
                     TerminalEvent::ClipboardStore(clipboard_type, content) => {
                         if self.ctx.terminal.is_focused {
                             self.ctx.clipboard.store(clipboard_type, content);

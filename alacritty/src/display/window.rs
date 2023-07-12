@@ -248,11 +248,6 @@ impl Window {
     }
 
     #[inline]
-    pub fn request_redraw(&self) {
-        self.window.request_redraw();
-    }
-
-    #[inline]
     pub fn set_mouse_cursor(&mut self, cursor: CursorIcon) {
         if cursor != self.current_mouse_cursor {
             self.current_mouse_cursor = cursor;

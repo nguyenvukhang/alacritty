@@ -1,7 +1,6 @@
 //! ANSI Terminal Stream Parsing.
 
 use std::convert::TryFrom;
-use std::fmt::Write;
 use std::time::{Duration, Instant};
 use std::{iter, str};
 
@@ -29,75 +28,6 @@ const SYNC_START_ESCAPE_START: [u8; SYNC_ESCAPE_START_LEN] = [b'\x1b', b'P', b'=
 
 /// Start of the DCS sequence for terminating synchronized updates.
 const SYNC_END_ESCAPE_START: [u8; SYNC_ESCAPE_START_LEN] = [b'\x1b', b'P', b'=', b'2', b's'];
-
-/// Parse colors in XParseColor format.
-fn xparse_color(color: &[u8]) -> Option<Rgb> {
-    if !color.is_empty() && color[0] == b'#' {
-        parse_legacy_color(&color[1..])
-    } else if color.len() >= 4 && &color[..4] == b"rgb:" {
-        parse_rgb_color(&color[4..])
-    } else {
-        None
-    }
-}
-
-/// Parse colors in `rgb:r(rrr)/g(ggg)/b(bbb)` format.
-fn parse_rgb_color(color: &[u8]) -> Option<Rgb> {
-    let colors = str::from_utf8(color).ok()?.split('/').collect::<Vec<_>>();
-
-    if colors.len() != 3 {
-        return None;
-    }
-
-    // Scale values instead of filling with `0`s.
-    let scale = |input: &str| {
-        if input.len() > 4 {
-            None
-        } else {
-            let max = u32::pow(16, input.len() as u32) - 1;
-            let value = u32::from_str_radix(input, 16).ok()?;
-            Some((255 * value / max) as u8)
-        }
-    };
-
-    Some(Rgb { r: scale(colors[0])?, g: scale(colors[1])?, b: scale(colors[2])? })
-}
-
-/// Parse colors in `#r(rrr)g(ggg)b(bbb)` format.
-fn parse_legacy_color(color: &[u8]) -> Option<Rgb> {
-    let item_len = color.len() / 3;
-
-    // Truncate/Fill to two byte precision.
-    let color_from_slice = |slice: &[u8]| {
-        let col = usize::from_str_radix(str::from_utf8(slice).ok()?, 16).ok()? << 4;
-        Some((col >> (4 * slice.len().saturating_sub(1))) as u8)
-    };
-
-    Some(Rgb {
-        r: color_from_slice(&color[0..item_len])?,
-        g: color_from_slice(&color[item_len..item_len * 2])?,
-        b: color_from_slice(&color[item_len * 2..])?,
-    })
-}
-
-fn parse_number(input: &[u8]) -> Option<u8> {
-    if input.is_empty() {
-        return None;
-    }
-    let mut num: u8 = 0;
-    for c in input {
-        let c = *c as char;
-        if let Some(digit) = c.to_digit(10) {
-            num = match num.checked_mul(10).and_then(|v| v.checked_add(digit as u8)) {
-                Some(v) => v,
-                None => return None,
-            }
-        } else {
-            return None;
-        }
-    }
-    Some(num)
-}
 
 /// Internal state for VTE processor.
 #[derive(Debug, Default)]
@@ -329,11 +259,6 @@ pub trait Handler {
 
     /// Linefeed.
     fn linefeed(&mut self) {}
-
-    /// Ring the bell.
-    ///
-    /// Hopefully this is never implemented.
-    fn bell(&mut self) {}
 
     /// Substitute char under cursor.
     fn substitute(&mut self) {}
@@ -907,7 +832,6 @@ where
             C0::BS => self.handler.backspace(),
             C0::CR => self.handler.carriage_return(),
             C0::LF | C0::VT | C0::FF => self.handler.linefeed(),
-            C0::BEL => self.handler.bell(),
             C0::SUB => self.handler.substitute(),
             C0::SI => self.handler.set_active_charset(CharsetIndex::G0),
             C0::SO => self.handler.set_active_charset(CharsetIndex::G1),
@@ -944,196 +868,6 @@ where
             },
             Some(Dcs::SyncEnd) => (),
             _ => debug!("[unhandled unhook]"),
-        }
-    }
-
-    #[inline]
-    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
-        let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
-
-        fn unhandled(params: &[&[u8]]) {
-            let mut buf = String::new();
-            for items in params {
-                buf.push('[');
-                for item in *items {
-                    let _ = write!(buf, "{:?}", *item as char);
-                }
-                buf.push_str("],");
-            }
-            debug!("[unhandled osc_dispatch]: [{}] at line {}", &buf, line!());
-        }
-
-        if params.is_empty() || params[0].is_empty() {
-            return;
-        }
-
-        match params[0] {
-            // Set window title.
-            b"0" | b"2" => {
-                if params.len() >= 2 {
-                    let title = params[1..]
-                        .iter()
-                        .flat_map(|x| str::from_utf8(x))
-                        .collect::<Vec<&str>>()
-                        .join(";")
-                        .trim()
-                        .to_owned();
-                    self.handler.set_title(Some(title));
-                    return;
-                }
-                unhandled(params);
-            },
-
-            // Set color index.
-            b"4" => {
-                if params.len() <= 1 || params.len() % 2 == 0 {
-                    unhandled(params);
-                    return;
-                }
-
-                for chunk in params[1..].chunks(2) {
-                    let index = match parse_number(chunk[0]) {
-                        Some(index) => index,
-                        None => {
-                            unhandled(params);
-                            continue;
-                        },
-                    };
-
-                    if let Some(c) = xparse_color(chunk[1]) {
-                        self.handler.set_color(index as usize, c);
-                    } else if chunk[1] == b"?" {
-                        let prefix = format!("4;{index}");
-                        self.handler.dynamic_color_sequence(prefix, index as usize, terminator);
-                    } else {
-                        unhandled(params);
-                    }
-                }
-            },
-
-            // Hyperlink.
-            b"8" if params.len() > 2 => {
-                let link_params = params[1];
-
-                // NOTE: The escape sequence is of form 'OSC 8 ; params ; URI ST', where
-                // URI is URL-encoded. However `;` is a special character and might be
-                // passed as is, thus we need to rebuild the URI.
-                let mut uri = str::from_utf8(params[2]).unwrap_or_default().to_string();
-                for param in params[3..].iter() {
-                    uri.push(';');
-                    uri.push_str(str::from_utf8(param).unwrap_or_default());
-                }
-
-                // The OSC 8 escape sequence must be stopped when getting an empty `uri`.
-                if uri.is_empty() {
-                    self.handler.set_hyperlink(None);
-                    return;
-                }
-
-                // Link parameters are in format of `key1=value1:key2=value2`. Currently only key
-                // `id` is defined.
-                let id = link_params
-                    .split(|&b| b == b':')
-                    .find_map(|kv| kv.strip_prefix(b"id="))
-                    .and_then(|kv| str::from_utf8(kv).ok());
-
-                self.handler.set_hyperlink(Some(Hyperlink::new(id, uri)));
-            },
-
-            // Get/set Foreground, Background, Cursor colors.
-            b"10" | b"11" | b"12" => {
-                if params.len() >= 2 {
-                    if let Some(mut dynamic_code) = parse_number(params[0]) {
-                        for param in &params[1..] {
-                            // 10 is the first dynamic color, also the foreground.
-                            let offset = dynamic_code as usize - 10;
-                            let index = NamedColor::Foreground as usize + offset;
-
-                            // End of setting dynamic colors.
-                            if index > NamedColor::Cursor as usize {
-                                unhandled(params);
-                                break;
-                            }
-
-                            if let Some(color) = xparse_color(param) {
-                                self.handler.set_color(index, color);
-                            } else if param == b"?" {
-                                self.handler.dynamic_color_sequence(
-                                    dynamic_code.to_string(),
-                                    index,
-                                    terminator,
-                                );
-                            } else {
-                                unhandled(params);
-                            }
-                            dynamic_code += 1;
-                        }
-                        return;
-                    }
-                }
-                unhandled(params);
-            },
-
-            // Set cursor style.
-            b"50" => {
-                if params.len() >= 2
-                    && params[1].len() >= 13
-                    && params[1][0..12] == *b"CursorShape="
-                {
-                    let shape = match params[1][12] as char {
-                        '0' => CursorShape::Block,
-                        '1' => CursorShape::Beam,
-                        '2' => CursorShape::Underline,
-                        _ => return unhandled(params),
-                    };
-                    self.handler.set_cursor_shape(shape);
-                    return;
-                }
-                unhandled(params);
-            },
-
-            // Set clipboard.
-            b"52" => {
-                if params.len() < 3 {
-                    return unhandled(params);
-                }
-
-                let clipboard = params[1].first().unwrap_or(&b'c');
-                match params[2] {
-                    b"?" => self.handler.clipboard_load(*clipboard, terminator),
-                    base64 => self.handler.clipboard_store(*clipboard, base64),
-                }
-            },
-
-            // Reset color index.
-            b"104" => {
-                // Reset all color indexes when no parameters are given.
-                if params.len() == 1 || params[1].is_empty() {
-                    for i in 0..256 {
-                        self.handler.reset_color(i);
-                    }
-                    return;
-                }
-
-                // Reset color indexes given as parameters.
-                for param in &params[1..] {
-                    match parse_number(param) {
-                        Some(index) => self.handler.reset_color(index as usize),
-                        None => unhandled(params),
-                    }
-                }
-            },
-
-            // Reset foreground color.
-            b"110" => self.handler.reset_color(NamedColor::Foreground as usize),
-
-            // Reset background color.
-            b"111" => self.handler.reset_color(NamedColor::Background as usize),
-
-            // Reset text cursor color.
-            b"112" => self.handler.reset_color(NamedColor::Cursor as usize),
-
-            _ => unhandled(params),
         }
     }
 
