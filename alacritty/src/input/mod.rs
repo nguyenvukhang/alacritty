@@ -97,6 +97,9 @@ pub trait ActionContext<T: EventListener> {
     fn terminal(&self) -> &Term<T>;
     fn terminal_mut(&mut self) -> &mut Term<T>;
     fn spawn_new_instance(&mut self) {}
+    fn create_new_virtual_tab(&mut self);
+    fn select_next_virtual_tab(&mut self);
+    fn select_previous_virtual_tab(&mut self);
     #[cfg(target_os = "macos")]
     fn create_new_window(&mut self, _tabbing_id: Option<String>) {}
     #[cfg(not(target_os = "macos"))]
@@ -414,10 +417,16 @@ impl<T: EventListener> Execute<T> for Action {
                     ctx.create_new_window(tabbing_id);
                 }
             },
+            #[cfg(not(target_os = "macos"))]
+            Action::CreateNewTab => ctx.create_new_virtual_tab(),
             #[cfg(target_os = "macos")]
             Action::SelectNextTab => ctx.window().select_next_tab(),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectNextTab => ctx.select_next_virtual_tab(),
             #[cfg(target_os = "macos")]
             Action::SelectPreviousTab => ctx.window().select_previous_tab(),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectPreviousTab => ctx.select_previous_virtual_tab(),
             #[cfg(target_os = "macos")]
             Action::SelectTab1 => ctx.window().select_tab_at_index(0),
             #[cfg(target_os = "macos")]

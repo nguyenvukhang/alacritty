@@ -44,27 +44,32 @@ use crate::message_bar::MessageBuffer;
 use crate::scheduler::Scheduler;
 use crate::{input, renderer};
 
+struct TerminalContext {
+    terminal: Arc<FairMutex<Term<EventProxy>>>,
+    #[cfg(not(windows))]
+    master_fd: RawFd,
+    #[cfg(not(windows))]
+    shell_pid: u32,
+    notifier: Notifier,
+}
+
 /// Event context for one individual Alacritty window.
 pub struct WindowContext {
     pub message_buffer: MessageBuffer,
     pub display: Display,
     pub dirty: bool,
     event_queue: Vec<WinitEvent<Event>>,
-    terminal: Arc<FairMutex<Term<EventProxy>>>,
+    terminal_contexts: Arc<FairMutex<Vec<TerminalContext>>>,
+    terminal_ctx_idx: usize,
     cursor_blink_timed_out: bool,
     prev_bell_cmd: Option<Instant>,
     modifiers: Modifiers,
     inline_search_state: InlineSearchState,
     search_state: SearchState,
-    notifier: Notifier,
     mouse: Mouse,
     touch: TouchPurpose,
     occluded: bool,
     preserve_title: bool,
-    #[cfg(not(windows))]
-    master_fd: RawFd,
-    #[cfg(not(windows))]
-    shell_pid: u32,
     window_config: ParsedOptions,
     config: Rc<UiConfig>,
 }
@@ -231,17 +236,20 @@ impl WindowContext {
             event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
         }
 
-        // Create context for the Alacritty window.
-        Ok(WindowContext {
-            preserve_title,
+        let terminal_ctx = TerminalContext {
             terminal,
-            display,
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
             shell_pid,
-            config,
             notifier: Notifier(loop_tx),
+        };
+
+        // Create context for the Alacritty window.
+        Ok(WindowContext {
+            preserve_title,
+            display,
+            config,
             cursor_blink_timed_out: Default::default(),
             prev_bell_cmd: Default::default(),
             inline_search_state: Default::default(),
@@ -254,7 +262,90 @@ impl WindowContext {
             mouse: Default::default(),
             touch: Default::default(),
             dirty: Default::default(),
+            terminal_contexts: Arc::new(FairMutex::new(vec![terminal_ctx])),
+            terminal_ctx_idx: 0,
         })
+    }
+
+    /// Create a new virtual tab.
+    pub fn new_virtual_tab(
+        &mut self,
+        options: WindowOptions,
+        proxy: EventLoopProxy<Event>,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut ctxs = self.terminal_contexts.lock();
+
+        // Unfocus the current terminal.
+        ctxs[self.terminal_ctx_idx].terminal.lock().is_focused = false;
+
+        // Brute-force a new index.
+        let new_idx = ctxs.len();
+
+        let mut pty_config = self.config.pty_config();
+        options.terminal_options.override_pty_config(&mut pty_config);
+
+        let event_proxy = EventProxy::new(proxy, self.display.window.id());
+
+        // Create the terminal.
+        //
+        // This object contains all of the state about what's being displayed. It's
+        // wrapped in a clonable mutex since both the I/O loop and display need to
+        // access it.
+        let mut terminal =
+            Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
+        terminal.is_focused = true;
+        let terminal = Arc::new(FairMutex::new(terminal));
+
+        // Create the PTY.
+        //
+        // The PTY forks a process to run the shell on the slave side of the
+        // pseudoterminal. A file descriptor for the master side is retained for
+        // reading/writing to the shell.
+        let pty =
+            tty::new(&pty_config, self.display.size_info.into(), self.display.window.id().into())?;
+
+        #[cfg(not(windows))]
+        let master_fd = pty.file().as_raw_fd();
+        #[cfg(not(windows))]
+        let shell_pid = pty.child().id();
+
+        // Create the pseudoterminal I/O loop.
+        //
+        // PTY I/O is ran on another thread as to not occupy cycles used by the
+        // renderer and input processing. Note that access to the terminal state is
+        // synchronized since the I/O loop updates the state, and the display
+        // consumes it periodically.
+        let event_loop = PtyEventLoop::new(
+            Arc::clone(&terminal),
+            event_proxy.clone(),
+            pty,
+            pty_config.drain_on_exit,
+            self.config.debug.ref_test,
+        )?;
+
+        // The event loop channel allows write requests from the event processor
+        // to be sent to the pty loop and ultimately written to the pty.
+        let loop_tx = event_loop.channel();
+
+        // Kick off the I/O thread.
+        let _io_thread = event_loop.spawn();
+
+        // Start cursor blinking, in case `Focused` isn't sent on startup.
+        if self.config.cursor.style().blinking {
+            event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
+        }
+
+        ctxs.push(TerminalContext {
+            terminal,
+            #[cfg(not(windows))]
+            master_fd,
+            #[cfg(not(windows))]
+            shell_pid,
+            notifier: Notifier(loop_tx),
+        });
+        self.terminal_ctx_idx = new_idx;
+        self.dirty = true;
+        Ok(())
     }
 
     /// Update the terminal window to the latest config.
@@ -265,7 +356,9 @@ impl WindowContext {
         self.config = self.window_config.override_config_rc(self.config.clone());
 
         self.display.update_config(&self.config);
-        self.terminal.lock().set_options(self.config.term_options());
+        let mut ctxs = self.terminal_contexts.lock();
+        let ctx = ctxs.get_mut(self.terminal_ctx_idx).unwrap();
+        ctx.terminal.lock().set_options(self.config.term_options());
 
         // Reload cursor if its thickness has changed.
         if (old_config.cursor.thickness() - self.config.cursor.thickness()).abs() > f32::EPSILON {
@@ -332,6 +425,18 @@ impl WindowContext {
         self.dirty = true;
     }
 
+    pub fn select_next_virtual_tab(&mut self) {
+        let ctxs = self.terminal_contexts.lock();
+        self.terminal_ctx_idx = (self.terminal_ctx_idx + 1) % ctxs.len();
+        self.dirty = true;
+    }
+
+    pub fn select_previous_virtual_tab(&mut self) {
+        let ctxs = self.terminal_contexts.lock();
+        self.terminal_ctx_idx = (self.terminal_ctx_idx + ctxs.len() - 1) % ctxs.len();
+        self.dirty = true;
+    }
+
     /// Get reference to the window's configuration.
     #[cfg(unix)]
     pub fn config(&self) -> &UiConfig {
@@ -387,7 +492,9 @@ impl WindowContext {
         }
 
         // Redraw the window.
-        let terminal = self.terminal.lock();
+        let ctxs = self.terminal_contexts.lock();
+        let ctx = ctxs.get(self.terminal_ctx_idx).unwrap();
+        let terminal = ctx.terminal.lock();
         self.display.draw(
             terminal,
             scheduler,
@@ -422,7 +529,9 @@ impl WindowContext {
             },
         }
 
-        let mut terminal = self.terminal.lock();
+        let mut ctxs = self.terminal_contexts.lock();
+        let ctx = ctxs.get_mut(self.terminal_ctx_idx).unwrap();
+        let mut terminal = ctx.terminal.lock();
 
         let old_is_searching = self.search_state.history_index.is_some();
 
@@ -433,7 +542,7 @@ impl WindowContext {
             inline_search_state: &mut self.inline_search_state,
             search_state: &mut self.search_state,
             modifiers: &mut self.modifiers,
-            notifier: &mut self.notifier,
+            notifier: &mut ctx.notifier,
             display: &mut self.display,
             mouse: &mut self.mouse,
             touch: &mut self.touch,
@@ -441,9 +550,9 @@ impl WindowContext {
             occluded: &mut self.occluded,
             terminal: &mut terminal,
             #[cfg(not(windows))]
-            master_fd: self.master_fd,
+            master_fd: ctx.master_fd,
             #[cfg(not(windows))]
-            shell_pid: self.shell_pid,
+            shell_pid: ctx.shell_pid,
             preserve_title: self.preserve_title,
             config: &self.config,
             event_proxy,
@@ -463,7 +572,7 @@ impl WindowContext {
             Self::submit_display_update(
                 &mut terminal,
                 &mut self.display,
-                &mut self.notifier,
+                &mut ctx.notifier,
                 &self.message_buffer,
                 &mut self.search_state,
                 old_is_searching,
@@ -501,7 +610,9 @@ impl WindowContext {
     /// Write the ref test results to the disk.
     pub fn write_ref_test_results(&self) {
         // Dump grid state.
-        let mut grid = self.terminal.lock().grid().clone();
+        let mut ctxs = self.terminal_contexts.lock();
+        let ctx = ctxs.get_mut(self.terminal_ctx_idx).unwrap();
+        let mut grid = ctx.terminal.lock().grid().clone();
         grid.initialize_all();
         grid.truncate();
 
@@ -562,7 +673,10 @@ impl WindowContext {
 
 impl Drop for WindowContext {
     fn drop(&mut self) {
-        // Shutdown the terminal's PTY.
-        let _ = self.notifier.0.send(Msg::Shutdown);
+        let mut ctxs = self.terminal_contexts.lock();
+        for ctx in ctxs.iter_mut() {
+            // Shutdown the terminal's PTY.
+            let _ = ctx.notifier.0.send(Msg::Shutdown);
+        }
     }
 }

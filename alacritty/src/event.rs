@@ -369,6 +369,28 @@ impl ApplicationHandler<Event> for Processor {
                     }
                 }
             },
+            // Create a new virtual tab.
+            (EventType::CreateVirtualTab(options), Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(window_id) {
+                    if let Err(err) = window_context.new_virtual_tab(options, self.proxy.clone()) {
+                        error!("Could not open window: {err:?}");
+                    } else {
+                        log::info!("Created a new tab!");
+                    }
+                }
+            },
+            // Select the next tab in the current window.
+            (EventType::SelectNextVirtualTab, Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(window_id) {
+                    window_context.select_next_virtual_tab();
+                }
+            },
+            // Select the previous tab in the current window.
+            (EventType::SelectPreviousVirtualTab, Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(window_id) {
+                    window_context.select_previous_virtual_tab();
+                }
+            },
             // Create a new terminal window.
             (EventType::CreateWindow(options), _) => {
                 // XXX Ensure that no context is current when creating a new window,
@@ -542,6 +564,9 @@ pub enum EventType {
     ConfigReload(PathBuf),
     Message(Message),
     Scroll(Scroll),
+    CreateVirtualTab(WindowOptions),
+    SelectNextVirtualTab,
+    SelectPreviousVirtualTab,
     CreateWindow(WindowOptions),
     #[cfg(unix)]
     IpcConfig(IpcConfig),
@@ -874,6 +899,31 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         }
 
         self.spawn_daemon(&alacritty, &args);
+    }
+
+    fn create_new_virtual_tab(&mut self) {
+        let mut options = WindowOptions::default();
+        options.terminal_options.working_directory =
+            foreground_process_path(self.master_fd, self.shell_pid).ok();
+        let window_id = self.window().id();
+
+        let _ = self
+            .event_proxy
+            .send_event(Event::new(EventType::CreateVirtualTab(options), Some(window_id)));
+    }
+
+    fn select_next_virtual_tab(&mut self) {
+        let window_id = self.window().id();
+        let _ = self
+            .event_proxy
+            .send_event(Event::new(EventType::SelectNextVirtualTab, Some(window_id)));
+    }
+
+    fn select_previous_virtual_tab(&mut self) {
+        let window_id = self.window().id();
+        let _ = self
+            .event_proxy
+            .send_event(Event::new(EventType::SelectPreviousVirtualTab, Some(window_id)));
     }
 
     #[cfg(not(windows))]
@@ -1927,6 +1977,9 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 EventType::IpcConfig(_) | EventType::IpcGetConfig(..) => (),
                 EventType::Message(_)
                 | EventType::ConfigReload(_)
+                | EventType::CreateVirtualTab(_)
+                | EventType::SelectNextVirtualTab
+                | EventType::SelectPreviousVirtualTab
                 | EventType::CreateWindow(_)
                 | EventType::Frame => (),
             },
