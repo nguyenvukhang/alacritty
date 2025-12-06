@@ -498,6 +498,18 @@ impl WindowContext {
         self.display.window.id()
     }
 
+    pub fn new_virtual_tab(
+        &mut self,
+        options: WindowOptions,
+        proxy: EventLoopProxy<Event>,
+    ) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+
+    pub fn select_next_virtual_tab(&mut self) {}
+
+    pub fn select_previous_virtual_tab(&mut self) {}
+
     /// Write the ref test results to the disk.
     pub fn write_ref_test_results(&self) {
         // Dump grid state.

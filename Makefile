@@ -27,6 +27,9 @@ vpath $(TARGET) $(RELEASE_DIR)
 vpath $(APP_NAME) $(APP_DIR)
 vpath $(DMG_NAME) $(APP_DIR)
 
+khang-editing:
+	cargo run -- -v
+
 all: help
 
 help: ## Print this help message
