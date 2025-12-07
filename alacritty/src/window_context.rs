@@ -506,6 +506,68 @@ impl WindowContext {
         options: WindowOptions,
         proxy: EventLoopProxy<Event>,
     ) -> Result<(), Box<dyn Error>> {
+        let mut pty_config = self.config.pty_config();
+        options.terminal_options.override_pty_config(&mut pty_config);
+
+        let event_proxy = EventProxy::new(proxy, self.display.window.id());
+
+        // Create the terminal.
+        //
+        // This object contains all of the state about what's being displayed. It's
+        // wrapped in a clonable mutex since both the I/O loop and display need to
+        // access it.
+        let terminal =
+            Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
+        let terminal = Arc::new(FairMutex::new(terminal));
+
+        // Create the PTY.
+        //
+        // The PTY forks a process to run the shell on the slave side of the
+        // pseudoterminal. A file descriptor for the master side is retained for
+        // reading/writing to the shell.
+        let pty =
+            tty::new(&pty_config, self.display.size_info.into(), self.display.window.id().into())?;
+
+        #[cfg(not(windows))]
+        let master_fd = pty.file().as_raw_fd();
+        #[cfg(not(windows))]
+        let shell_pid = pty.child().id();
+
+        // Create the pseudoterminal I/O loop.
+        //
+        // PTY I/O is ran on another thread as to not occupy cycles used by the
+        // renderer and input processing. Note that access to the terminal state is
+        // synchronized since the I/O loop updates the state, and the display
+        // consumes it periodically.
+        let event_loop = PtyEventLoop::new(
+            Arc::clone(&terminal),
+            event_proxy.clone(),
+            pty,
+            pty_config.drain_on_exit,
+            self.config.debug.ref_test,
+        )?;
+
+        // The event loop channel allows write requests from the event processor
+        // to be sent to the pty loop and ultimately written to the pty.
+        let loop_tx = event_loop.channel();
+
+        // Kick off the I/O thread.
+        let _io_thread = event_loop.spawn();
+
+        // Start cursor blinking, in case `Focused` isn't sent on startup.
+        if self.config.cursor.style().blinking {
+            event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
+        }
+
+        self.tab_manager.add(
+            terminal,
+            Notifier(loop_tx),
+            #[cfg(not(windows))]
+            master_fd,
+            #[cfg(not(windows))]
+            shell_pid,
+        );
+
         Ok(())
     }
 
