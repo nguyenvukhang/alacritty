@@ -42,6 +42,7 @@ use crate::event::{
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 use crate::message_bar::MessageBuffer;
 use crate::scheduler::Scheduler;
+use crate::tabs::TabManager;
 use crate::{input, renderer};
 
 /// Event context for one individual Alacritty window.
@@ -50,6 +51,7 @@ pub struct WindowContext {
     pub display: Display,
     pub dirty: bool,
     event_queue: Vec<WinitEvent<Event>>,
+    tab_manager: TabManager,
     terminal: Arc<FairMutex<Term<EventProxy>>>,
     cursor_blink_timed_out: bool,
     prev_bell_cmd: Option<Instant>,
@@ -234,6 +236,7 @@ impl WindowContext {
         // Create context for the Alacritty window.
         Ok(WindowContext {
             preserve_title,
+            tab_manager: TabManager::new(),
             terminal,
             display,
             #[cfg(not(windows))]
