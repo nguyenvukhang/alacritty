@@ -571,9 +571,33 @@ impl WindowContext {
         Ok(())
     }
 
-    pub fn select_next_virtual_tab(&mut self) {}
+    pub fn select_next_virtual_tab(&mut self) {
+        self.tab_manager.select_next_virtual_tab(
+            &mut self.terminal,
+            &mut self.notifier,
+            #[cfg(not(windows))]
+            &mut self.master_fd,
+            #[cfg(not(windows))]
+            &mut self.shell_pid,
+        );
+        let event = Event::new(TerminalEvent::Wakeup.into(), None);
+        self.event_queue.push(event.into());
+        self.dirty = true;
+    }
 
-    pub fn select_previous_virtual_tab(&mut self) {}
+    pub fn select_previous_virtual_tab(&mut self) {
+        self.tab_manager.select_previous_virtual_tab(
+            &mut self.terminal,
+            &mut self.notifier,
+            #[cfg(not(windows))]
+            &mut self.master_fd,
+            #[cfg(not(windows))]
+            &mut self.shell_pid,
+        );
+        let event = Event::new(TerminalEvent::Wakeup.into(), None);
+        self.event_queue.push(event.into());
+        self.dirty = true;
+    }
 
     /// Write the ref test results to the disk.
     pub fn write_ref_test_results(&self) {
